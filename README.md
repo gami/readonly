@@ -1,19 +1,21 @@
 # readonly
 
-公開フィールドを維持したまま、外部パッケージからの再代入を静的解析で禁止する Go linter。
+[日本語](README.ja.md)
 
-ORM や JSON シリアライズの都合でフィールドを公開したいが、
+A Go linter that forbids reassignment of struct fields from outside their declaring package, while keeping the fields exported.
+
+Sometimes a field must stay exported for ORM mapping or JSON serialization, but you still want to prevent arbitrary writes like:
 
 ```go
 user.TenantID = "xxx"
 user.Status = StatusDeleted
 ```
 
-のような任意の書き換えは防ぎたい、というケースのためのツールです。
+This tool catches them with static analysis.
 
-## 使い方
+## Usage
 
-対象フィールドに `reassign:"internal"` タグを付けます。
+Mark the fields you want to protect with the `reassign:"internal"` tag.
 
 ```go
 type User struct {
@@ -21,67 +23,67 @@ type User struct {
     TenantID string `reassign:"internal"`
     Status   Status `reassign:"internal"`
 
-    Name string // タグなし: 自由に代入可能
+    Name string // untagged: freely assignable
 }
 ```
 
-実行:
+Run:
 
 ```sh
 go run github.com/gami/readonly/cmd/readonly@latest ./...
 ```
 
-または `go vet` 経由:
+Or via `go vet`:
 
 ```sh
 go build -o readonly ./cmd/readonly
 go vet -vettool=$(pwd)/readonly ./...
 ```
 
-## 判定ルール
+## Rules
 
-許可される操作:
+Allowed:
 
 ```go
-// 同一パッケージ内からの代入
+// Assignment within the declaring package
 func (u *User) ChangeStatus(s Status) { u.Status = s }
 
-// Struct Literal による初期化(生成時の値設定)
+// Initialization via composite literal
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
 ```
 
-禁止される操作(外部パッケージから):
+Forbidden (from outside the declaring package):
 
 ```go
-user.Status = StatusDeleted        // 直接代入
-userPtr.Status = StatusDeleted     // ポインタ経由
-order.User.Status = StatusDeleted  // ネストしたアクセス
-users[i].Status = StatusDeleted    // スライス要素
-user.TenantID += "-x"              // 複合代入
-admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
+user.Status = StatusDeleted        // direct assignment
+userPtr.Status = StatusDeleted     // through a pointer
+order.User.Status = StatusDeleted  // nested access
+users[i].Status = StatusDeleted    // slice element
+user.TenantID += "-x"              // compound assignment
+admin.Status = StatusDeleted       // field promoted via embedding
 ```
 
-診断メッセージ:
+Diagnostic:
 
 ```text
 field User.Status is marked reassign:"internal" and cannot be modified outside package github.com/example/user
 ```
 
-## 想定ユースケース
+## Use cases
 
-- **DDD Entity** — 状態変更をエンティティのメソッド経由に限定する
-- **マルチテナント** — `TenantID` の誤った書き換えを防ぐ
-- **監査上変更禁止の識別子** — 発番後の請求書番号などの変更を防ぐ
+- **DDD entities** — restrict state changes to the entity's own methods
+- **Multi-tenancy** — prevent accidental overwrites of `TenantID`
+- **Audit-protected identifiers** — keep invoice numbers and the like immutable after issuance
 
-## 非目標・既知の制限
+## Non-goals and known limitations
 
-- リフレクション・unsafe による変更の検出、実行時制御は対象外
-- フィールドのアドレスを取ってポインタ越しに書き込むケース(`p := &u.Status; *p = x`)は検出しない
+- Writes via reflection or `unsafe`, and runtime enforcement, are out of scope
+- Writes through a stored field address (`p := &u.Status; *p = x`) are not detected
 
-本 linter は静的解析による誤操作防止を目的とします。
+This linter aims to prevent mistakes through static analysis, not to provide a security boundary.
 
-## 今後の拡張案
+## Planned extensions
 
-- `reassign:"immutable"` — どこからも再代入不可(struct literal のみ許可)
-- `reassign:"package"` — `internal` の別名
-- `reassign:"friend=github.com/example/service"` — 特定パッケージからのみ許可
+- `reassign:"immutable"` — no reassignment anywhere (composite literals only)
+- `reassign:"package"` — alias of `internal`
+- `reassign:"friend=github.com/example/service"` — allow reassignment only from specific packages

@@ -65,6 +65,40 @@ go install github.com/gami/readonly/cmd/readonly@latest
 go vet -vettool=$(which readonly) ./...
 ```
 
+### golangci-lint
+
+[module plugin](https://golangci-lint.run/plugins/module-plugins/) として golangci-lint に組み込めます。リポジトリに `.custom-gcl.yml` を置きます:
+
+```yaml
+version: v2.9.0 # 使用している golangci-lint のバージョン
+plugins:
+  - module: 'github.com/gami/readonly'
+    import: 'github.com/gami/readonly/plugin'
+    version: latest # 特定バージョンへの固定も可
+```
+
+カスタムバイナリをビルドします(初回とバージョン更新時のみ):
+
+```sh
+golangci-lint custom
+```
+
+`.golangci.yml` で有効化します:
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - readonly
+  settings:
+    custom:
+      readonly:
+        type: module
+        description: Forbids writes to readonly-tagged struct fields.
+```
+
+あとは `./custom-gcl run ./...` で実行できます。`//nolint:readonly` による抑制も通常通り機能します。
+
 ## 判定ルール
 
 許可される操作:

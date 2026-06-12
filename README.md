@@ -67,6 +67,40 @@ go install github.com/gami/readonly/cmd/readonly@latest
 go vet -vettool=$(which readonly) ./...
 ```
 
+### golangci-lint
+
+readonly ships as a [module plugin](https://golangci-lint.run/plugins/module-plugins/). Put `.custom-gcl.yml` in your repository:
+
+```yaml
+version: v2.9.0 # your golangci-lint version
+plugins:
+  - module: 'github.com/gami/readonly'
+    import: 'github.com/gami/readonly/plugin'
+    version: latest # or pin a specific version
+```
+
+Build the custom binary once (and after version bumps):
+
+```sh
+golangci-lint custom
+```
+
+Enable the linter in `.golangci.yml`:
+
+```yaml
+version: "2"
+linters:
+  enable:
+    - readonly
+  settings:
+    custom:
+      readonly:
+        type: module
+        description: Forbids writes to readonly-tagged struct fields.
+```
+
+Then run `./custom-gcl run ./...`. Suppression via `//nolint:readonly` works as usual.
+
 ## Rules
 
 Allowed:

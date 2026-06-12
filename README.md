@@ -42,6 +42,18 @@ inv := Invoice{Number: "INV-1"} // OK: initialization
 inv.Number = "INV-2"            // reported, even inside the declaring package
 ```
 
+Both modes accept the `shallow` option, which protects only the field
+itself and leaves its contents writable:
+
+```go
+type Cart struct {
+    Lines []string `readonly:"external,shallow"`
+}
+
+cart.Lines = nil    // reported: reassignment of the field
+cart.Lines[0] = "x" // allowed: contents stay writable
+```
+
 Run:
 
 ```sh
@@ -83,7 +95,7 @@ admin.Status = StatusDeleted       // field promoted via embedding
 ```
 
 A readonly tag on a struct-, slice-, or map-typed field also protects the
-field's *contents*:
+field's *contents* by default (opt out with the `shallow` option):
 
 ```go
 type Account struct {

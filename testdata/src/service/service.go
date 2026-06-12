@@ -83,9 +83,25 @@ func newInvoice() *model.Invoice {
 	return inv
 }
 
+// shallow は中身への書き込みを許可し、フィールド自体の再代入のみ禁止する。
+func shallow(cart *model.Cart, w *model.Wrap) {
+	cart.Lines[0] = "ok"
+	cart.Owner.Name = "ok"
+	w.Name = "ok" // 昇格フィールド経由の中身書き込みも許可
+
+	cart.Lines = nil             // want `field Cart\.Lines is readonly outside package model`
+	cart.Owner = model.Profile{} // want `field Cart\.Owner is readonly outside package model`
+	w.Profile = model.Profile{}  // want `field Wrap\.Profile is readonly outside package model`
+}
+
 // 未知のタグ値は宣言時に報告される。
 type config struct {
 	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external", "immutable"\)`
+}
+
+// 未知のオプションも宣言時に報告される。
+type config2 struct {
+	Mode string `readonly:"external,shalow"` // want `invalid readonly tag option "shalow" \(valid options: "shallow"\)`
 }
 
 // Struct Literal による初期化は許可される。

@@ -41,6 +41,17 @@ inv := Invoice{Number: "INV-1"} // OK: 生成時の値設定
 inv.Number = "INV-2"            // 定義パッケージ内でも報告される
 ```
 
+どちらのモードにも `shallow` オプションを付けられます。フィールド自体の再代入のみを禁止し、中身は書き込み可能のままにします:
+
+```go
+type Cart struct {
+    Lines []string `readonly:"external,shallow"`
+}
+
+cart.Lines = nil    // 報告される: フィールド自体の再代入
+cart.Lines[0] = "x" // 許可: 中身は書き込み可能
+```
+
 実行:
 
 ```sh
@@ -81,7 +92,7 @@ user.TenantID += "-x"              // 複合代入(++ / -- も同様)
 admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
 ```
 
-構造体・スライス・マップ型のフィールドに付けた readonly タグは、フィールドの「中身」も保護します:
+構造体・スライス・マップ型のフィールドに付けた readonly タグは、デフォルトでフィールドの「中身」も保護します(`shallow` オプションで解除可能):
 
 ```go
 type Account struct {

@@ -10,6 +10,10 @@
 //
 // Fields tagged `readonly:"immutable"` cannot be reassigned anywhere, even
 // in the declaring package; only composite literal initialization sets them.
+//
+// The `shallow` option (e.g. `readonly:"external,shallow"`) limits
+// protection to reassignment of the field itself, leaving its contents
+// writable.
 package readonly
 
 import (
@@ -36,9 +40,11 @@ Fields can stay exported for ORM/JSON purposes while writes like
 	*userPtr = model.User{}
 
 are rejected. readonly:"external" allows writes from the declaring package;
-readonly:"immutable" rejects reassignment everywhere. Composite literal
-initialization (model.User{Status: s}) is always allowed. Unrecognized
-readonly tag values are reported at the declaration site.`
+readonly:"immutable" rejects reassignment everywhere. The shallow option
+(readonly:"external,shallow") protects only the field itself, leaving its
+contents writable. Composite literal initialization (model.User{Status: s})
+is always allowed. Unrecognized readonly tag values are reported at the
+declaration site.`
 
 const (
 	// tagKey is the struct tag key this analyzer inspects.
@@ -47,7 +53,36 @@ const (
 	tagExternal = "external"
 	// tagImmutable forbids reassignment everywhere.
 	tagImmutable = "immutable"
+	// optShallow limits protection to reassignment of the field itself.
+	optShallow = "shallow"
 )
+
+// protection is a parsed readonly tag value: a mode and its options.
+type protection struct {
+	mode    string // tagExternal, tagImmutable, or "" if unprotected
+	shallow bool   // contents of the field stay writable
+}
+
+// parseTag parses a raw struct tag into a protection. Unrecognized modes
+// yield no protection — they are reported separately at the declaration
+// site by checkTagValues.
+func parseTag(tag string) protection {
+	v, ok := reflect.StructTag(tag).Lookup(tagKey)
+	if !ok {
+		return protection{}
+	}
+	parts := strings.Split(v, ",")
+	if parts[0] != tagExternal && parts[0] != tagImmutable {
+		return protection{}
+	}
+	p := protection{mode: parts[0]}
+	for _, opt := range parts[1:] {
+		if opt == optShallow {
+			p.shallow = true
+		}
+	}
+	return p
+}
 
 // Analyzer is the readonly analyzer.
 var Analyzer = &analysis.Analyzer{
@@ -102,8 +137,19 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 		if err != nil {
 			continue
 		}
-		if v, ok := reflect.StructTag(raw).Lookup(tagKey); ok && v != tagExternal && v != tagImmutable {
-			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q)", v, tagExternal, tagImmutable)
+		v, ok := reflect.StructTag(raw).Lookup(tagKey)
+		if !ok {
+			continue
+		}
+		parts := strings.Split(v, ",")
+		if parts[0] != tagExternal && parts[0] != tagImmutable {
+			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q)", parts[0], tagExternal, tagImmutable)
+			continue
+		}
+		for _, opt := range parts[1:] {
+			if opt != optShallow {
+				pass.Reportf(f.Tag.Pos(), "invalid readonly tag option %q (valid options: %q)", opt, optShallow)
+			}
 		}
 	}
 }
@@ -119,15 +165,20 @@ func checkWrite(pass *analysis.Pass, expr ast.Expr) {
 	}
 	// Walk the target expression inward so that writes into the contents of
 	// a readonly field (order.User.Name, user.Items[0]) are caught, not just
-	// reassignment of the field itself.
+	// reassignment of the field itself. Only the first selector's final field
+	// is reassigned directly; everything deeper is a contents write, which
+	// shallow protection permits.
+	direct := true
 	for {
 		switch e := expr.(type) {
 		case *ast.SelectorExpr:
-			if checkSelection(pass, e) {
+			if checkSelection(pass, e, direct) {
 				return
 			}
+			direct = false
 			expr = ast.Unparen(e.X)
 		case *ast.IndexExpr:
+			direct = false
 			expr = ast.Unparen(e.X)
 		default:
 			return
@@ -135,16 +186,19 @@ func checkWrite(pass *analysis.Pass, expr ast.Expr) {
 	}
 }
 
-// checkSelection reports sel if any field on its selection path — including
-// fields traversed implicitly through embedding — is readonly outside the
-// current package. It reports whether a diagnostic was emitted.
-func checkSelection(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
+// checkSelection reports sel if a protected field on its selection path —
+// including fields traversed implicitly through embedding — is written in
+// violation of its mode. direct indicates that the final field of the path
+// is itself the assignment target (as opposed to a write into its
+// contents). It reports whether a diagnostic was emitted.
+func checkSelection(pass *analysis.Pass, sel *ast.SelectorExpr, direct bool) bool {
 	selection, ok := pass.TypesInfo.Selections[sel]
 	if !ok || selection.Kind() != types.FieldVal {
 		return false
 	}
 	t := selection.Recv()
-	for _, idx := range selection.Index() {
+	index := selection.Index()
+	for i, idx := range index {
 		if ptr, ok := t.Underlying().(*types.Pointer); ok {
 			t = ptr.Elem()
 		}
@@ -153,8 +207,10 @@ func checkSelection(pass *analysis.Pass, sel *ast.SelectorExpr) bool {
 			return false
 		}
 		field := st.Field(idx)
-		if m := tagMode(st.Tag(idx)); violates(pass, m, field) {
-			pass.Reportf(sel.Sel.Pos(), "%s", describe(m, typeName(t), field))
+		p := parseTag(st.Tag(idx))
+		reassigned := direct && i == len(index)-1
+		if violates(pass, p.mode, field) && (!p.shallow || reassigned) {
+			pass.Reportf(sel.Sel.Pos(), "%s", describe(p.mode, typeName(t), field))
 			return true
 		}
 		t = field.Type()
@@ -179,10 +235,12 @@ func checkStarStore(pass *analysis.Pass, star *ast.StarExpr) {
 	if !ok {
 		return
 	}
+	// A whole-struct store reassigns every field directly, so the shallow
+	// option does not exempt it.
 	for i := 0; i < st.NumFields(); i++ {
 		field := st.Field(i)
-		if m := tagMode(st.Tag(i)); violates(pass, m, field) {
-			pass.Reportf(star.Pos(), "cannot assign to *%s: %s", typeName(elem), describe(m, typeName(elem), field))
+		if p := parseTag(st.Tag(i)); violates(pass, p.mode, field) {
+			pass.Reportf(star.Pos(), "cannot assign to *%s: %s", typeName(elem), describe(p.mode, typeName(elem), field))
 			return
 		}
 	}
@@ -196,17 +254,6 @@ func foreign(pass *analysis.Pass, pkg *types.Package) bool {
 		return false
 	}
 	return pkg.Path() != strings.TrimSuffix(pass.Pkg.Path(), "_test")
-}
-
-// tagMode returns the protection mode declared by a raw struct tag, or ""
-// if the field is unprotected (no tag, or an unrecognized value — those are
-// reported separately at the declaration site).
-func tagMode(tag string) string {
-	switch v, _ := reflect.StructTag(tag).Lookup(tagKey); v {
-	case tagExternal, tagImmutable:
-		return v
-	}
-	return ""
 }
 
 // violates reports whether the current package is forbidden from writing

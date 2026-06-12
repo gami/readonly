@@ -56,6 +56,25 @@ func Renumber(inv *Invoice) {
 	inv.Number = "INV-2" // want `field Invoice\.Number is immutable`
 }
 
+type Cart struct {
+	Lines []string `readonly:"external,shallow"`
+	Owner Profile  `readonly:"external,shallow"`
+}
+
+type Wrap struct {
+	Profile `readonly:"external,shallow"`
+}
+
+type Snapshot struct {
+	Data []byte `readonly:"immutable,shallow"`
+}
+
+// shallow な immutable は中身の書き込みを許可するが、再代入は定義パッケージ内でも不可。
+func Patch(s *Snapshot) {
+	s.Data[0] = 0
+	s.Data = nil // want `field Snapshot\.Data is immutable`
+}
+
 // 同一パッケージ内からの代入は許可される。
 func (u *User) ChangeStatus(status Status) {
 	u.Status = status

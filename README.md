@@ -2,7 +2,7 @@
 
 [日本語](README.ja.md)
 
-A Go linter that forbids reassignment of struct fields from outside their declaring package, while keeping the fields exported.
+A Go linter that forbids writes to struct fields from outside their declaring package, while keeping the fields exported.
 
 Sometimes a field must stay exported for ORM mapping, JSON serialization, or OpenAPI compatibility, but you still want to prevent arbitrary writes like:
 
@@ -36,8 +36,8 @@ go run github.com/gami/readonly/cmd/readonly@latest ./...
 Or via `go vet`:
 
 ```sh
-go build -o readonly ./cmd/readonly
-go vet -vettool=$(pwd)/readonly ./...
+go install github.com/gami/readonly/cmd/readonly@latest
+go vet -vettool=$(which readonly) ./...
 ```
 
 ## Rules
@@ -47,6 +47,9 @@ Allowed:
 ```go
 // Assignment within the declaring package
 func (u *User) Activate() { u.Status = StatusActive }
+
+// The declaring package's own black-box tests (package user_test)
+u.Status = StatusActive
 
 // Initialization via composite literal (including constructors)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
@@ -59,9 +62,29 @@ user.Status = StatusDeleted        // direct assignment
 userPtr.Status = StatusDeleted     // through a pointer
 order.User.Status = StatusDeleted  // nested access
 users[i].Status = StatusDeleted    // slice element
-counter.Value += 1                 // compound assignment
-counter.Value++                    // increment / decrement
+user.TenantID += "-x"              // compound assignment, ++ and -- too
+*userPtr = model.User{}            // whole-struct store through a pointer
 admin.Status = StatusDeleted       // field promoted via embedding
+```
+
+A readonly tag on a struct-, slice-, or map-typed field also protects the
+field's *contents*:
+
+```go
+type Account struct {
+    Profile Profile  `readonly:"external"`
+    Items   []string `readonly:"external"`
+}
+
+account.Profile.Name = "x" // forbidden: writes into a readonly field
+account.Items[0] = "x"     // forbidden: element of a readonly field
+```
+
+Unrecognized tag values are reported at the declaration site, so a typo
+cannot silently disable protection:
+
+```go
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external")
 ```
 
 Diagnostic:
@@ -83,6 +106,8 @@ field User.Status is readonly outside package github.com/example/user
 ## Non-goals and known limitations
 
 - Writes via reflection or `unsafe`, and runtime enforcement, are out of scope
-- Writes through a stored field address (`p := &u.Status; *p = x`) are not detected
+- Writes through the field's address are not detected, whether stored
+  (`p := &u.Status; *p = x`) or passed to a function
+  (`rows.Scan(&u.TenantID)`, `json.Unmarshal(data, &u.Status)`)
 
 This linter aims to prevent mistakes through static analysis, not to provide a security boundary.

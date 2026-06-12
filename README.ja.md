@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-公開フィールドを維持したまま、外部パッケージからの再代入を静的解析で禁止する Go linter。
+公開フィールドを維持したまま、外部パッケージからの書き込みを静的解析で禁止する Go linter。
 
 ORM・JSON シリアライズ・OpenAPI との互換性のためにフィールドを公開したいが、
 
@@ -36,8 +36,8 @@ go run github.com/gami/readonly/cmd/readonly@latest ./...
 または `go vet` 経由:
 
 ```sh
-go build -o readonly ./cmd/readonly
-go vet -vettool=$(pwd)/readonly ./...
+go install github.com/gami/readonly/cmd/readonly@latest
+go vet -vettool=$(which readonly) ./...
 ```
 
 ## 判定ルール
@@ -47,6 +47,9 @@ go vet -vettool=$(pwd)/readonly ./...
 ```go
 // 同一パッケージ内からの代入
 func (u *User) Activate() { u.Status = StatusActive }
+
+// 定義パッケージ自身のブラックボックステスト(package user_test)
+u.Status = StatusActive
 
 // Struct Literal による初期化(コンストラクタ含む)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
@@ -59,9 +62,27 @@ user.Status = StatusDeleted        // 直接代入
 userPtr.Status = StatusDeleted     // ポインタ経由
 order.User.Status = StatusDeleted  // ネストしたアクセス
 users[i].Status = StatusDeleted    // スライス要素
-counter.Value += 1                 // 複合代入
-counter.Value++                    // インクリメント・デクリメント
+user.TenantID += "-x"              // 複合代入(++ / -- も同様)
+*userPtr = model.User{}            // ポインタ経由の構造体丸ごと代入
 admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
+```
+
+構造体・スライス・マップ型のフィールドに付けた readonly タグは、フィールドの「中身」も保護します:
+
+```go
+type Account struct {
+    Profile Profile  `readonly:"external"`
+    Items   []string `readonly:"external"`
+}
+
+account.Profile.Name = "x" // 禁止: readonly フィールドの中身への書き込み
+account.Items[0] = "x"     // 禁止: readonly フィールドの要素への書き込み
+```
+
+未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることはありません:
+
+```go
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external")
 ```
 
 診断メッセージ:
@@ -87,6 +108,6 @@ field User.Status is readonly outside package github.com/example/user
 ## 非目標・既知の制限
 
 - リフレクション・unsafe による変更の検出、実行時制御は対象外
-- フィールドのアドレスを取ってポインタ越しに書き込むケース(`p := &u.Status; *p = x`)は検出しない
+- フィールドのアドレス経由の書き込みは検出しない。ポインタを保存する形(`p := &u.Status; *p = x`)も、関数に渡す形(`rows.Scan(&u.TenantID)`、`json.Unmarshal(data, &u.Status)`)も同様
 
 本 linter は静的解析による誤操作防止を目的とし、セキュリティ境界を提供するものではありません。

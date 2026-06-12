@@ -47,6 +47,34 @@ func promoted(admin *Admin) {
 	admin.Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
+// タグ付きフィールドの「中身」への書き込みも禁止される。
+func interior(account *model.Account) {
+	account.Profile.Name = "x" // want `field Account\.Profile is readonly outside package model`
+	account.Items[0] = "x"     // want `field Account\.Items is readonly outside package model`
+	account.Meta["k"] = "v"    // want `field Account\.Meta is readonly outside package model`
+}
+
+// タグ付き埋め込みフィールド経由で昇格したフィールドへの書き込みも禁止される。
+func embeddedInterior(doc *model.Doc) {
+	doc.N = 1 // want `field Doc\.Audit is readonly outside package model`
+}
+
+// ポインタ経由の構造体丸ごと代入も禁止される。
+func wholeStore(user *model.User) {
+	*user = model.User{} // want `cannot assign to \*User: field User\.ID is readonly outside package model`
+}
+
+// range 節での代入も禁止される。
+func rangeAssign(counter *model.Counter, xs []int) {
+	for counter.Value = range xs { // want `field Counter\.Value is readonly outside package model`
+	}
+}
+
+// 未知のタグ値は宣言時に報告される。
+type config struct {
+	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external"\)`
+}
+
 // Struct Literal による初期化は許可される。
 func create(id, tenantID string) model.User {
 	return model.User{

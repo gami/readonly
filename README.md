@@ -166,6 +166,16 @@ field User.Status is readonly outside package github.com/example/user
 
 When you do want full immutability — no reassignment even by the owning package — use `readonly:"immutable"`.
 
+## Comparison with forbidigo
+
+[forbidigo](https://github.com/ashanbrown/forbidigo) can also restrict access to specific struct fields via `pkg.Type.Field` patterns (with `analyze-types` enabled), but the two tools place the responsibility differently:
+
+- **Who declares the rule.** With readonly, the *owner of the type* declares protection once, as a struct tag next to the field. With forbidigo, every *consuming repository* must list the right patterns in its lint configuration — and keep them in sync as fields are added.
+- **What is forbidden.** readonly forbids *writes* only (reassignment, contents, whole-struct stores) and leaves reads untouched. forbidigo matches identifier usage, so reads are flagged too unless patterns are carefully engineered.
+- **Built-in allowances.** readonly understands the write semantics: same-package writes, composite literal initialization, and the declaring package's own `_test` package are allowed without any configuration.
+
+Use forbidigo when you want a consumer-side policy over identifiers in general; use readonly when the invariant belongs to the type itself.
+
 ## Non-goals and known limitations
 
 - Writes via reflection or `unsafe`, and runtime enforcement, are out of scope

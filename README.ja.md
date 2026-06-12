@@ -166,6 +166,16 @@ field User.Status is readonly outside package github.com/example/user
 
 定義パッケージ内からの再代入も含めて禁止したい場合は `readonly:"immutable"` を使います。
 
+## forbidigo との違い
+
+[forbidigo](https://github.com/ashanbrown/forbidigo) も `analyze-types` を有効にすれば `pkg.Type.Field` パターンで特定フィールドへのアクセスを禁止できますが、責務の置き場所が異なります:
+
+- **誰がルールを宣言するか。** readonly は**型の所有者**が struct タグとしてフィールドの隣に一度だけ宣言します。forbidigo は**利用側の各リポジトリ**が lint 設定にパターンを列挙し、フィールド追加のたびに同期し続ける必要があります
+- **何を禁止するか。** readonly は**書き込みのみ**を禁止し(再代入・中身・丸ごと代入)、読み取りは自由です。forbidigo は識別子の使用にマッチするため、パターンを工夫しない限り読み取りも検出されます
+- **組み込みの許可ルール。** readonly は書き込みのセマンティクスを理解しており、同一パッケージ・composite literal による初期化・定義パッケージ自身の `_test` パッケージを設定なしで許可します
+
+識別子全般に対する利用側ポリシーが欲しいなら forbidigo、不変条件が型そのものに属するなら readonly が向いています。
+
 ## 非目標・既知の制限
 
 - リフレクション・unsafe による変更の検出、実行時制御は対象外

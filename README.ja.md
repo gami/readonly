@@ -27,6 +27,20 @@ type User struct {
 }
 ```
 
+タグ値は2種類あります:
+
+- `readonly:"external"` — 定義パッケージ内からのみ書き込み可能
+- `readonly:"immutable"` — どこからも再代入不可。composite literal による生成時のみ値を設定できる
+
+```go
+type Invoice struct {
+    Number string `readonly:"immutable"`
+}
+
+inv := Invoice{Number: "INV-1"} // OK: 生成時の値設定
+inv.Number = "INV-2"            // 定義パッケージ内でも報告される
+```
+
 実行:
 
 ```sh
@@ -82,7 +96,7 @@ account.Items[0] = "x"     // 禁止: readonly フィールドの要素への書
 未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることはありません:
 
 ```go
-Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external")
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
 ```
 
 診断メッセージ:
@@ -95,7 +109,7 @@ field User.Status is readonly outside package github.com/example/user
 
 - **DDD Entity** — 状態変更をエンティティのメソッド経由に限定する
 - **マルチテナント SaaS** — `TenantID` の誤った書き換えを防ぐ
-- **監査上変更禁止の識別子** — 発番後の請求書番号などの変更を防ぐ
+- **監査上変更禁止の識別子** — 発番後の請求書番号などの変更を防ぐ(`readonly:"immutable"`)
 
 ## 設計方針
 
@@ -104,6 +118,8 @@ field User.Status is readonly outside package github.com/example/user
 - 公開フィールドを維持できる
 - ORM や JSON シリアライズと両立できる
 - 状態変更をドメインメソッドへ集約できる
+
+定義パッケージ内からの再代入も含めて禁止したい場合は `readonly:"immutable"` を使います。
 
 ## 非目標・既知の制限
 

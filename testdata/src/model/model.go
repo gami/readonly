@@ -41,6 +41,21 @@ type Doc struct {
 	Audit `readonly:"external"`
 }
 
+type Invoice struct {
+	Number string `readonly:"immutable"`
+	Note   string
+}
+
+// immutable フィールドは composite literal による生成でのみ値を設定できる。
+func NewInvoice(number string) *Invoice {
+	return &Invoice{Number: number}
+}
+
+// immutable フィールドは定義パッケージ内でも再代入できない。
+func Renumber(inv *Invoice) {
+	inv.Number = "INV-2" // want `field Invoice\.Number is immutable`
+}
+
 // 同一パッケージ内からの代入は許可される。
 func (u *User) ChangeStatus(status Status) {
 	u.Status = status

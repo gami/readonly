@@ -70,9 +70,22 @@ func rangeAssign(counter *model.Counter, xs []int) {
 	}
 }
 
+// immutable フィールドは外部パッケージからも再代入できない。
+func renumber(inv *model.Invoice) {
+	inv.Number = "INV-3"   // want `field Invoice\.Number is immutable`
+	*inv = model.Invoice{} // want `cannot assign to \*Invoice: field Invoice\.Number is immutable`
+}
+
+// immutable でも composite literal による生成とタグなしフィールドへの代入は許可される。
+func newInvoice() *model.Invoice {
+	inv := &model.Invoice{Number: "INV-1"}
+	inv.Note = "ok"
+	return inv
+}
+
 // 未知のタグ値は宣言時に報告される。
 type config struct {
-	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external"\)`
+	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external", "immutable"\)`
 }
 
 // Struct Literal による初期化は許可される。

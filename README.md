@@ -27,6 +27,21 @@ type User struct {
 }
 ```
 
+Two tag values are supported:
+
+- `readonly:"external"` — writable only inside the declaring package
+- `readonly:"immutable"` — never reassignable, anywhere; the value is set
+  once via a composite literal
+
+```go
+type Invoice struct {
+    Number string `readonly:"immutable"`
+}
+
+inv := Invoice{Number: "INV-1"} // OK: initialization
+inv.Number = "INV-2"            // reported, even inside the declaring package
+```
+
 Run:
 
 ```sh
@@ -84,7 +99,7 @@ Unrecognized tag values are reported at the declaration site, so a typo
 cannot silently disable protection:
 
 ```go
-Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external")
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
 ```
 
 Diagnostic:
@@ -97,11 +112,13 @@ field User.Status is readonly outside package github.com/example/user
 
 - **DDD entities** — restrict state changes to the entity's own methods
 - **Multi-tenant SaaS** — prevent accidental overwrites of `TenantID`
-- **Audit-protected identifiers** — keep invoice numbers and the like fixed after issuance
+- **Audit-protected identifiers** — keep invoice numbers and the like fixed after issuance (`readonly:"immutable"`)
 
 ## Design philosophy
 
 `readonly:"external"` does **not** mean full immutability. It means *read-only as seen from outside the declaring package*: the owning package can freely change state, while external direct writes are rejected. This keeps fields exported and compatible with ORM/JSON serialization, while concentrating state transitions in domain methods.
+
+When you do want full immutability — no reassignment even by the owning package — use `readonly:"immutable"`.
 
 ## Non-goals and known limitations
 

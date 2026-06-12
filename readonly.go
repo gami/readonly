@@ -1,8 +1,8 @@
 // Package readonly defines an Analyzer that reports reassignment of struct
-// fields marked with the `reassign:"internal"` tag from outside the package
+// fields marked with the `readonly:"external"` tag from outside the package
 // that declares them.
 //
-// Fields tagged `reassign:"internal"` may stay exported (e.g. for ORM or
+// Fields tagged `readonly:"external"` may stay exported (e.g. for ORM or
 // JSON serialization), but any assignment to them from another package is
 // reported. Assignment within the declaring package and initialization via
 // composite literals are allowed.
@@ -19,7 +19,7 @@ import (
 	"golang.org/x/tools/go/ast/inspector"
 )
 
-const doc = `readonly reports reassignment of fields tagged reassign:"internal" from outside their declaring package
+const doc = `readonly reports reassignment of fields tagged readonly:"external" from outside their declaring package
 
 Fields can stay exported for ORM/JSON purposes while assignments like
 
@@ -29,10 +29,10 @@ are rejected unless they occur in the package that declares the field.
 Composite literal initialization (model.User{Status: s}) is always allowed.`
 
 // tagKey is the struct tag key this analyzer inspects.
-const tagKey = "reassign"
+const tagKey = "readonly"
 
-// tagInternal restricts assignment to the declaring package.
-const tagInternal = "internal"
+// tagExternal restricts assignment to the declaring package.
+const tagExternal = "external"
 
 // Analyzer is the readonly analyzer.
 var Analyzer = &analysis.Analyzer{
@@ -88,14 +88,14 @@ func checkWrite(pass *analysis.Pass, expr ast.Expr) {
 		return
 	}
 	tag, ok := reflect.StructTag(owner.tag).Lookup(tagKey)
-	if !ok || tag != tagInternal {
+	if !ok || tag != tagExternal {
 		return
 	}
 	if field.Pkg() == nil || field.Pkg().Path() == pass.Pkg.Path() {
 		return
 	}
-	pass.Reportf(sel.Pos(), "field %s.%s is marked reassign:%q and cannot be modified outside package %s",
-		owner.name, field.Name(), tag, field.Pkg().Path())
+	pass.Reportf(sel.Pos(), "field %s.%s is readonly outside package %s",
+		owner.name, field.Name(), field.Pkg().Path())
 }
 
 // fieldOwner describes the struct that directly declares a field, along with

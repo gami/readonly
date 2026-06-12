@@ -8,15 +8,19 @@ const (
 )
 
 type User struct {
-	ID       string `reassign:"internal"`
-	TenantID string `reassign:"internal"`
-	Status   Status `reassign:"internal"`
+	ID       string `readonly:"external"`
+	TenantID string `readonly:"external"`
+	Status   Status `readonly:"external"`
 
 	Name string
 }
 
 type Order struct {
 	User User
+}
+
+type Counter struct {
+	Value int `readonly:"external"`
 }
 
 // 同一パッケージ内からの代入は許可される。

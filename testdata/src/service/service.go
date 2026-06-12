@@ -4,32 +4,38 @@ import "model"
 
 // 外部パッケージからの代入は禁止される。
 func direct(user model.User) {
-	user.Status = model.StatusDeleted // want `field User\.Status is marked reassign:"internal" and cannot be modified outside package model`
+	user.Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
 // ポインタ経由も禁止される。
 func viaPointer(userPtr *model.User) {
-	userPtr.Status = model.StatusDeleted // want `field User\.Status is marked reassign:"internal" and cannot be modified outside package model`
+	userPtr.Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
 // ネストしたアクセスも禁止される。
 func nested(order *model.Order) {
-	order.User.Status = model.StatusDeleted // want `field User\.Status is marked reassign:"internal" and cannot be modified outside package model`
+	order.User.Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
 // スライス要素も禁止される。
 func sliceElem(users []model.User, i int) {
-	users[i].Status = model.StatusDeleted // want `field User\.Status is marked reassign:"internal" and cannot be modified outside package model`
+	users[i].Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
 // 多重代入の各左辺もそれぞれ検査される。
 func multiAssign(user *model.User) {
-	user.ID, user.TenantID = "a", "b" // want `field User\.ID is marked reassign:"internal" and cannot be modified outside package model` `field User\.TenantID is marked reassign:"internal" and cannot be modified outside package model`
+	user.ID, user.TenantID = "a", "b" // want `field User\.ID is readonly outside package model` `field User\.TenantID is readonly outside package model`
 }
 
 // 複合代入も禁止される。
 func compound(user *model.User) {
-	user.TenantID += "-suffix" // want `field User\.TenantID is marked reassign:"internal" and cannot be modified outside package model`
+	user.TenantID += "-suffix" // want `field User\.TenantID is readonly outside package model`
+}
+
+// インクリメント・デクリメントも禁止される。
+func incDec(counter *model.Counter) {
+	counter.Value++ // want `field Counter\.Value is readonly outside package model`
+	counter.Value-- // want `field Counter\.Value is readonly outside package model`
 }
 
 // 埋め込みで昇格したフィールドへの代入も禁止される。
@@ -38,7 +44,7 @@ type Admin struct {
 }
 
 func promoted(admin *Admin) {
-	admin.Status = model.StatusDeleted // want `field User\.Status is marked reassign:"internal" and cannot be modified outside package model`
+	admin.Status = model.StatusDeleted // want `field User\.Status is readonly outside package model`
 }
 
 // Struct Literal による初期化は許可される。

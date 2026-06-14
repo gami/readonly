@@ -172,8 +172,11 @@ field User.Status is readonly outside package github.com/example/user
 
 ## 想定ユースケース
 
+この linter は DB レベルの制約(外部キー、RLS)を置き換えるものではなく、それらを補完する**アプリケーション層での誤代入ガード**です。テナント分離のような本質的な防御は引き続き DB 側で行うのが基本です。
+
 - **DDD Entity** — 状態変更をエンティティのメソッド経由に限定する
-- **マルチテナント SaaS** — `TenantID` の誤った書き換えを防ぐ
+- **リレーションを持つ ID** — `Order.UserID` のような外部キーが、生成後に別の親へ勝手に付け替えられるのを防ぐ
+- **イベント / 追記専用レコード** — 記録済みイベントの `OccurredAt` やペイロードを変更させない(`readonly:"immutable"`)
 - **監査上変更禁止の識別子** — 発番後の請求書番号などの変更を防ぐ(`readonly:"immutable"`)
 
 ## 設計方針

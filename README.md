@@ -180,9 +180,18 @@ field User.Status is readonly outside package github.com/example/user
 
 ## Use cases
 
+This linter is a complementary, app-level guard against *accidental
+reassignment* — not a substitute for database constraints (foreign keys,
+row-level security), which remain the primary defense for things like tenant
+isolation.
+
 - **DDD entities** — restrict state changes to the entity's own methods
-- **Multi-tenant SaaS** — prevent accidental overwrites of `TenantID`
-- **Audit-protected identifiers** — keep invoice numbers and the like fixed after issuance (`readonly:"immutable"`)
+- **Relation keys** — keep a foreign key such as `Order.UserID` from being
+  silently re-pointed at a different parent after creation
+- **Event / append-only records** — keep an event's `OccurredAt` and payload
+  fixed once recorded (`readonly:"immutable"`)
+- **Audit-protected identifiers** — keep invoice numbers and the like fixed
+  after issuance (`readonly:"immutable"`)
 
 ## Design philosophy
 

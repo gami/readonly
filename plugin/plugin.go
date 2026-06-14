@@ -14,18 +14,33 @@ func init() {
 	register.Plugin("readonly", New)
 }
 
-// New constructs the plugin instance. The readonly analyzer takes no
-// settings, so the raw settings value is ignored.
-func New(_ any) (register.LinterPlugin, error) {
-	return plugin{}, nil
+// Settings mirrors the linter's settings block in .golangci.yml.
+type Settings struct {
+	AllowAllTestFiles bool `json:"allow-all-test-files"`
 }
 
-type plugin struct{}
+// New constructs the plugin instance from its golangci-lint settings.
+func New(settings any) (register.LinterPlugin, error) {
+	s, err := register.DecodeSettings[Settings](settings)
+	if err != nil {
+		return nil, err
+	}
+	return plugin{settings: s}, nil
+}
 
-func (plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
+type plugin struct {
+	settings Settings
+}
+
+func (p plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
+	if p.settings.AllowAllTestFiles {
+		if err := readonly.Analyzer.Flags.Set("allow-all-test-files", "true"); err != nil {
+			return nil, err
+		}
+	}
 	return []*analysis.Analyzer{readonly.Analyzer}, nil
 }
 
-func (plugin) GetLoadMode() string {
+func (p plugin) GetLoadMode() string {
 	return register.LoadModeTypesInfo
 }

@@ -101,6 +101,30 @@ linters:
 
 Then run `./custom-gcl run ./...`. Suppression via `//nolint:readonly` works as usual.
 
+### Allowing writes in test files
+
+By default, writes are reported in any package other than the declaring one,
+including its tests. (The declaring package's *own* tests — `package
+user_test` alongside `user` — are always allowed.) Repository or service tests
+that build a fixture and then tweak a protected field therefore get flagged.
+
+Enable `-allow-all-test-files` to exempt every `*_test.go` file, so test code
+anywhere can mutate readonly fields while production code stays protected:
+
+```sh
+readonly -allow-all-test-files ./...
+```
+
+With golangci-lint, set it under the linter's `settings`:
+
+```yaml
+    custom:
+      readonly:
+        type: module
+        settings:
+          allow-all-test-files: true
+```
+
 ## Rules
 
 Allowed:

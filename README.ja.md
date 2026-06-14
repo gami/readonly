@@ -99,6 +99,26 @@ linters:
 
 あとは `./custom-gcl run ./...` で実行できます。`//nolint:readonly` による抑制も通常通り機能します。
 
+### テストファイルでの書き込みを許可する
+
+デフォルトでは、定義パッケージ以外のすべてのパッケージで書き込みが報告されます(テストを含む)。ただし定義パッケージ**自身**のテスト(`user` と同じ場所の `package user_test`)は常に許可されます。そのため、repository やサービスのテストで fixture を作って protected フィールドを差し替える操作は検出されてしまいます。
+
+`-allow-all-test-files` を有効にすると、すべての `*_test.go` ファイルが対象外になり、テストコードはどこからでも readonly フィールドを変更できます(本番コードは保護されたまま):
+
+```sh
+readonly -allow-all-test-files ./...
+```
+
+golangci-lint では linter の `settings` に指定します:
+
+```yaml
+    custom:
+      readonly:
+        type: module
+        settings:
+          allow-all-test-files: true
+```
+
 ## 判定ルール
 
 許可される操作:

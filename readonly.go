@@ -92,6 +92,17 @@ var Analyzer = &analysis.Analyzer{
 	Run:      run,
 }
 
+// allowAllTestFiles, when set, exempts writes in any *_test.go file from
+// the write checks. By default only the declaring package's own test files
+// are exempt (see foreign); this flag extends that to every test package so
+// that, e.g., a repository test in another package can mutate fixtures.
+var allowAllTestFiles bool
+
+func init() {
+	Analyzer.Flags.BoolVar(&allowAllTestFiles, "allow-all-test-files", false,
+		"allow writes to readonly fields in any *_test.go file, not just the declaring package's tests")
+}
+
 func run(pass *analysis.Pass) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 
@@ -159,6 +170,9 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 // or range clause.
 func checkWrite(pass *analysis.Pass, expr ast.Expr) {
 	expr = ast.Unparen(expr)
+	if allowAllTestFiles && inTestFile(pass, expr.Pos()) {
+		return
+	}
 	if star, ok := expr.(*ast.StarExpr); ok {
 		checkStarStore(pass, star)
 		return
@@ -244,6 +258,14 @@ func checkStarStore(pass *analysis.Pass, star *ast.StarExpr) {
 			return
 		}
 	}
+}
+
+// inTestFile reports whether pos lies in a *_test.go file.
+func inTestFile(pass *analysis.Pass, pos token.Pos) bool {
+	if f := pass.Fset.File(pos); f != nil {
+		return strings.HasSuffix(f.Name(), "_test.go")
+	}
+	return false
 }
 
 // foreign reports whether pkg is a package other than the one being

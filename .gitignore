@@ -1,0 +1,23 @@
+# Binaries
+/readonly
+/cmd/readonly/readonly
+*.exe
+*.test
+*.out
+
+# golangci-lint custom binary (built from .custom-gcl.yml)
+/custom-gcl
+/golangci-lint-custom
+
+# Coverage
+coverage.txt
+*.cover
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db

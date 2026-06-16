@@ -85,12 +85,7 @@ func parseTag(tag string) protection {
 }
 
 // Analyzer is the readonly analyzer.
-var Analyzer = &analysis.Analyzer{
-	Name:     "readonly",
-	Doc:      doc,
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
-	Run:      run,
-}
+var Analyzer = newAnalyzer()
 
 // allowAllTestFiles, when set, exempts writes in any *_test.go file from
 // the write checks. By default only the declaring package's own test files
@@ -98,9 +93,19 @@ var Analyzer = &analysis.Analyzer{
 // that, e.g., a repository test in another package can mutate fixtures.
 var allowAllTestFiles bool
 
-func init() {
-	Analyzer.Flags.BoolVar(&allowAllTestFiles, "allow-all-test-files", false,
+// newAnalyzer builds the readonly analyzer and registers its flags. Flag
+// registration lives here rather than in init() so the package has no
+// init() — a requirement for inclusion in golangci-lint.
+func newAnalyzer() *analysis.Analyzer {
+	a := &analysis.Analyzer{
+		Name:     "readonly",
+		Doc:      doc,
+		Requires: []*analysis.Analyzer{inspect.Analyzer},
+		Run:      run,
+	}
+	a.Flags.BoolVar(&allowAllTestFiles, "allow-all-test-files", false,
 		"allow writes to readonly fields in any *_test.go file, not just the declaring package's tests")
+	return a
 }
 
 func run(pass *analysis.Pass) (any, error) {

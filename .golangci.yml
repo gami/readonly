@@ -1,0 +1,6 @@
+version: "2"
+
+# Uses the default linter set (errcheck, govet, ineffassign, staticcheck,
+# unused). revive's var-naming is intentionally not enabled: it flags the
+# `plugin` package name, which deliberately matches the golangci-lint module
+# plugin convention.

@@ -2,20 +2,21 @@
 
 [English](README.md)
 
-公開フィールドを維持したまま、外部パッケージからの書き込みを静的解析で禁止する Go linter。
+`readonly` は、`readonly:"..."` タグを付けた構造体フィールドへの、定義パッケージ
+外からの書き込みを報告する Go linter です。
 
-ORM・JSON シリアライズ・OpenAPI との互換性のためにフィールドを公開したいが、
+フィールドは公開のままなので、ORM・JSON シリアライズ・生成された OpenAPI 型と
+そのまま使えます。この linter が止めるのは、別パッケージのコードによる次のような
+書き換えです:
 
 ```go
 user.TenantID = "xxx"
 user.Status = StatusDeleted
 ```
 
-のような任意の書き換えは防ぎたい、というケースのためのツールです。
-
 ## 使い方
 
-対象フィールドに `readonly:"external"` タグを付けます。
+保護したいフィールドにタグを付けます。
 
 ```go
 type User struct {
@@ -27,10 +28,11 @@ type User struct {
 }
 ```
 
-タグ値は2種類あります:
+タグ値は2種類です。
 
-- `readonly:"external"` — 定義パッケージ内からのみ書き込み可能
-- `readonly:"immutable"` — どこからも再代入不可。composite literal による生成時のみ値を設定できる
+- `readonly:"external"`: 定義パッケージ内からのみ書き込み可能。
+- `readonly:"immutable"`: どこからも再代入不可。composite literal による生成時に
+  一度だけ値を設定できる。
 
 ```go
 type Invoice struct {
@@ -41,7 +43,8 @@ inv := Invoice{Number: "INV-1"} // OK: 生成時の値設定
 inv.Number = "INV-2"            // 定義パッケージ内でも報告される
 ```
 
-どちらのモードにも `shallow` オプションを付けられます。フィールド自体の再代入のみを禁止し、中身は書き込み可能のままにします:
+どちらの値にも `shallow` オプションを付けられます。フィールド自体の再代入だけを
+禁止し、中身は書き込み可能のままにします。
 
 ```go
 type Cart struct {
@@ -52,13 +55,13 @@ cart.Lines = nil    // 報告される: フィールド自体の再代入
 cart.Lines[0] = "x" // 許可: 中身は書き込み可能
 ```
 
-実行:
+直接実行する場合:
 
 ```sh
 go run github.com/gami/readonly/cmd/readonly@latest ./...
 ```
 
-または `go vet` 経由:
+`go vet` 経由の場合:
 
 ```sh
 go install github.com/gami/readonly/cmd/readonly@latest
@@ -101,9 +104,14 @@ linters:
 
 ### テストファイルでの書き込みを許可する
 
-デフォルトでは、定義パッケージ以外のすべてのパッケージで書き込みが報告されます(テストを含む)。ただし定義パッケージ**自身**のテスト(`user` と同じ場所の `package user_test`)は常に許可されます。そのため、repository やサービスのテストで fixture を作って protected フィールドを差し替える操作は検出されてしまいます。
+デフォルトでは、定義パッケージ以外のすべてのパッケージで書き込みが報告されます
+(テストを含む)。ただし定義パッケージ自身のブラックボックステスト(`user` と同じ
+場所の `package user_test`)は常に許可されます。そのため、repository やサービスの
+テストで fixture を作って保護フィールドを差し替える操作は検出されてしまいます。
 
-`-allow-all-test-files` を有効にすると、すべての `*_test.go` ファイルが対象外になり、テストコードはどこからでも readonly フィールドを変更できます(本番コードは保護されたまま):
+`-allow-all-test-files` を有効にすると、すべての `*_test.go` ファイルが対象外に
+なり、テストコードはどこからでも readonly フィールドを変更できます(本番コードは
+保護されたまま):
 
 ```sh
 readonly -allow-all-test-files ./...
@@ -130,11 +138,11 @@ func (u *User) Activate() { u.Status = StatusActive }
 // 定義パッケージ自身のブラックボックステスト(package user_test)
 u.Status = StatusActive
 
-// Struct Literal による初期化(コンストラクタ含む)
+// composite literal による初期化(コンストラクタ含む)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
 ```
 
-禁止される操作(外部パッケージから):
+外部パッケージから禁止される操作:
 
 ```go
 user.Status = StatusDeleted        // 直接代入
@@ -146,7 +154,8 @@ user.TenantID += "-x"              // 複合代入(++ / -- も同様)
 admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
 ```
 
-構造体・スライス・マップ型のフィールドに付けた readonly タグは、デフォルトでフィールドの「中身」も保護します(`shallow` オプションで解除可能):
+構造体・スライス・マップ型のフィールドに付けた readonly タグは、デフォルトで
+フィールドの中身も保護します。`shallow` オプションで解除できます。
 
 ```go
 type Account struct {
@@ -158,50 +167,67 @@ account.Profile.Name = "x" // 禁止: readonly フィールドの中身への書
 account.Items[0] = "x"     // 禁止: readonly フィールドの要素への書き込み
 ```
 
-未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることはありません:
+未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることは
+ありません:
 
 ```go
 Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
 ```
 
-診断メッセージ:
+診断メッセージは次のようになります:
 
 ```text
 field User.Status is readonly outside package github.com/example/user
 ```
 
-## 想定ユースケース
+## どんなときに役立つか
 
-この linter は DB レベルの制約(外部キー、RLS)を置き換えるものではなく、それらを補完する**アプリケーション層での誤代入ガード**です。テナント分離のような本質的な防御は引き続き DB 側で行うのが基本です。
+これは DB レベルの制約(外部キー、RLS)を置き換えるものではなく、それらを補完する
+アプリケーション層での誤代入ガードです。テナント分離のような本質的な防御は引き続き
+DB 側で行うのが基本です。役立つ場面の例:
 
-- **DDD Entity** — 状態変更をエンティティのメソッド経由に限定する
-- **リレーションを持つ ID** — `Order.UserID` のような外部キーが、生成後に別の親へ勝手に付け替えられるのを防ぐ
-- **イベント / 追記専用レコード** — 記録済みイベントの `OccurredAt` やペイロードを変更させない(`readonly:"immutable"`)
-- **監査上変更禁止の識別子** — 発番後の請求書番号などの変更を防ぐ(`readonly:"immutable"`)
+- DDD のエンティティで、状態変更をエンティティ自身のメソッド経由に限定したいとき。
+- `Order.UserID` のようなリレーションキーが、生成後に別の親へ勝手に付け替えられる
+  のを防ぎたいとき。
+- 追記専用レコードで、記録済みイベントの `OccurredAt` やペイロードを固定したいとき
+  (`readonly:"immutable"`)。
+- 請求書番号のような監査上の識別子を、発番後に固定したいとき
+  (`readonly:"immutable"`)。
 
-## 設計方針
+## `external` と `immutable` の違い
 
-`readonly:"external"` は完全な不変性(immutable)を意味しません。「**定義パッケージ外から見ると読み取り専用**」を意味します。定義パッケージ内では状態変更を許可し、外部からの直接変更のみを防止します。これにより:
+`readonly:"external"` は完全な不変性ではありません。「定義パッケージの外から見ると
+読み取り専用」という意味です。所有パッケージ内では自由に状態を変更でき、外部からの
+直接書き込みだけを拒否します。これにより、フィールドを公開したまま(ORM や JSON
+シリアライズと両立したまま)、状態変更を型自身のメソッドへ集約できます。
 
-- 公開フィールドを維持できる
-- ORM や JSON シリアライズと両立できる
-- 状態変更をドメインメソッドへ集約できる
-
-定義パッケージ内からの再代入も含めて禁止したい場合は `readonly:"immutable"` を使います。
+所有パッケージからの再代入も含めて一切禁止したい場合は `readonly:"immutable"` を
+使います。
 
 ## forbidigo との違い
 
-[forbidigo](https://github.com/ashanbrown/forbidigo) も `analyze-types` を有効にすれば `pkg.Type.Field` パターンで特定フィールドへのアクセスを禁止できますが、責務の置き場所が異なります:
+[forbidigo](https://github.com/ashanbrown/forbidigo) も `analyze-types` を有効に
+すれば `pkg.Type.Field` パターンで特定フィールドへのアクセスを禁止できます。違いは
+ルールの置き場所です。
 
-- **誰がルールを宣言するか。** readonly は**型の所有者**が struct タグとしてフィールドの隣に一度だけ宣言します。forbidigo は**利用側の各リポジトリ**が lint 設定にパターンを列挙し、フィールド追加のたびに同期し続ける必要があります
-- **何を禁止するか。** readonly は**書き込みのみ**を禁止し(再代入・中身・丸ごと代入)、読み取りは自由です。forbidigo は識別子の使用にマッチするため、パターンを工夫しない限り読み取りも検出されます
-- **組み込みの許可ルール。** readonly は書き込みのセマンティクスを理解しており、同一パッケージ・composite literal による初期化・定義パッケージ自身の `_test` パッケージを設定なしで許可します
+- readonly は型の所有者が、フィールドの隣の struct タグとして一度だけ宣言します。
+  forbidigo は利用側の各リポジトリが lint 設定にパターンを列挙し、フィールド追加の
+  たびに同期し続ける必要があります。
+- readonly は書き込みのみ(再代入・中身・丸ごと代入)を禁止し、読み取りには触れません。
+  forbidigo は識別子の使用にマッチするため、パターンを工夫しない限り読み取りも
+  検出されます。
+- readonly は書き込みのセマンティクスを理解しているので、同一パッケージ内の書き込み・
+  composite literal による初期化・定義パッケージ自身の `_test` パッケージを、設定なし
+  で許可します。
 
-識別子全般に対する利用側ポリシーが欲しいなら forbidigo、不変条件が型そのものに属するなら readonly が向いています。
+識別子全般に対する利用側ポリシーが欲しいなら forbidigo、不変条件が型そのものに
+属するなら readonly が向いています。
 
-## 非目標・既知の制限
+## 制限
 
-- リフレクション・unsafe による変更の検出、実行時制御は対象外
-- フィールドのアドレス経由の書き込みは検出しない。ポインタを保存する形(`p := &u.Status; *p = x`)も、関数に渡す形(`rows.Scan(&u.TenantID)`、`json.Unmarshal(data, &u.Status)`)も同様
+- リフレクションや unsafe による変更の検出、実行時の制御は対象外です。
+- フィールドのアドレス経由の書き込みは検出しません。ポインタを保存する形
+  (`p := &u.Status; *p = x`)も、関数に渡す形(`rows.Scan(&u.TenantID)`、
+  `json.Unmarshal(data, &u.Status)`)も同様です。
 
-本 linter は静的解析による誤操作防止を目的とし、セキュリティ境界を提供するものではありません。
+これは誤操作を静的解析で捕まえるためのものであり、セキュリティ境界ではありません。

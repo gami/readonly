@@ -48,11 +48,13 @@ and leaves its contents writable:
 
 ```go
 type Cart struct {
-    Lines []string `readonly:"external,shallow"`
+    Lines  []string `readonly:"external,shallow"`
+    Parent *Node    `readonly:"external,shallow"` // shared object owned elsewhere
 }
 
-cart.Lines = nil    // reported: reassignment of the field
-cart.Lines[0] = "x" // allowed: contents stay writable
+cart.Lines = nil        // reported: reassignment of the field
+cart.Lines[0] = "x"     // allowed: contents stay writable
+cart.Parent.Name = "x"  // allowed: the pointee stays writable
 ```
 
 Run it directly:
@@ -171,15 +173,17 @@ order.User = model.User{}    // untagged field holding a User
 *admin = Admin{}             // Admin embeds model.User
 ```
 
-A readonly tag on a struct-, slice-, or map-typed field also protects the
-field's contents by default, including through the `delete`, `clear`, and
-`copy` builtins. Opt out with the `shallow` option:
+A readonly tag on a struct-, slice-, map-, or pointer-typed field also
+protects the field's contents by default: sub-fields, elements, and the
+pointee, including through the `delete`, `clear`, and `copy` builtins. Opt
+out with the `shallow` option:
 
 ```go
 type Account struct {
     Profile Profile           `readonly:"external"`
     Items   []string          `readonly:"external"`
     Meta    map[string]string `readonly:"external"`
+    Ref     *Profile          `readonly:"external"`
 }
 
 account.Profile.Name = "x"  // forbidden: writes into a readonly field
@@ -187,7 +191,15 @@ account.Items[0] = "x"      // forbidden: element of a readonly field
 copy(account.Items, src)    // forbidden: overwrites elements
 delete(account.Meta, "k")   // forbidden: removes an entry
 clear(account.Meta)         // forbidden: removes every entry
+account.Ref.Name = "x"      // forbidden: writes through a readonly pointer
+*account.Ref = Profile{}    // forbidden: overwrites the pointee
 ```
+
+Note the asymmetry with whole-struct stores above. "Contents" of a tagged
+field reach through a pointer, because `account.Ref.Name = "x"` really does
+write the pointee. A whole-struct store only overwrites what the struct holds
+by value, so `*order = Order{}` is not a write to whatever `order.UserPtr`
+pointed at. Both follow from which memory the assignment actually changes.
 
 An unrecognized tag value is reported at the declaration site, so a typo
 cannot silently disable protection:

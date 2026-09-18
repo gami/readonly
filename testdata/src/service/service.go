@@ -54,6 +54,16 @@ func interior(account *model.Account) {
 	account.Meta["k"] = "v"    // want `field Account\.Meta is readonly outside package model`
 }
 
+// ポインタ型のタグ付きフィールドは、参照先が「中身」として保護される。
+func pointerInterior(account *model.Account, p *model.Profile) {
+	account.Ref.Name = "x"         // want `field Account\.Ref is readonly outside package model`
+	*account.Ref = model.Profile{} // want `field Account\.Ref is readonly outside package model`
+	account.Ref = p                // want `field Account\.Ref is readonly outside package model`
+
+	account.Parent.Name = "x" // shallow: 参照先は書き込み可能
+	account.Parent = p        // want `field Account\.Parent is readonly outside package model`
+}
+
 // タグ付き埋め込みフィールド経由で昇格したフィールドへの書き込みも禁止される。
 func embeddedInterior(doc *model.Doc) {
 	doc.N = 1 // want `field Doc\.Audit is readonly outside package model`

@@ -38,6 +38,8 @@ type Account struct {
 	Profile Profile           `readonly:"external"`
 	Items   []string          `readonly:"external"`
 	Meta    map[string]string `readonly:"external"`
+	Ref     *Profile          `readonly:"external"`
+	Parent  *Profile          `readonly:"external,shallow"`
 }
 
 type Audit struct {

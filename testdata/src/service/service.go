@@ -61,7 +61,30 @@ func embeddedInterior(doc *model.Doc) {
 
 // ポインタ経由の構造体丸ごと代入も禁止される。
 func wholeStore(user *model.User) {
-	*user = model.User{} // want `cannot assign to \*User: field User\.ID is readonly outside package model`
+	*user = model.User{} // want `cannot assign to \*user: field User\.ID is readonly outside package model`
+}
+
+// 既存の格納先(スライス・マップ要素、フィールド、埋め込み先、配列要素)への
+// 丸ごと代入も禁止される。値として readonly フィールドを含む構造体は、入れ子でも同様。
+func wholeStoreIntoStorage(users []model.User, m map[string]model.User, order *model.Order, admin *Admin, team *model.Team, teams []model.Team) {
+	users[0] = model.User{}        // want `cannot assign to users\[0\]: field User\.ID is readonly outside package model`
+	m["k"] = model.User{}          // want `cannot assign to m\["k"\]: field User\.ID is readonly outside package model`
+	order.User = model.User{}      // want `cannot assign to order\.User: field User\.ID is readonly outside package model`
+	*order = model.Order{}         // want `cannot assign to \*order: field User\.ID is readonly outside package model`
+	*admin = Admin{}               // want `cannot assign to \*admin: field User\.ID is readonly outside package model`
+	team.Members[1] = model.User{} // want `cannot assign to team\.Members\[1\]: field User\.ID is readonly outside package model`
+	teams[0] = model.Team{}        // want `cannot assign to teams\[0\]: field User\.ID is readonly outside package model`
+}
+
+// 裸の変数への代入は初期化とみなして許可される。参照(ポインタ・スライス・マップ)の
+// 差し替えは、参照先の中身を上書きしないので許可される。
+func wholeStoreAllowed(team *model.Team, user *model.User, ptrs []*model.User) {
+	u := model.User{}
+	u = model.User{ID: "x"}
+	_ = u
+	team.Guests = nil
+	team.Owner = user
+	ptrs[0] = user
 }
 
 // range 節での代入も禁止される。
@@ -73,7 +96,31 @@ func rangeAssign(counter *model.Counter, xs []int) {
 // immutable フィールドは外部パッケージからも再代入できない。
 func renumber(inv *model.Invoice) {
 	inv.Number = "INV-3"   // want `field Invoice\.Number is immutable`
-	*inv = model.Invoice{} // want `cannot assign to \*Invoice: field Invoice\.Number is immutable`
+	*inv = model.Invoice{} // want `cannot assign to \*inv: field Invoice\.Number is immutable`
+}
+
+// 中身を書き換える組み込み関数(delete / clear / copy)も禁止される。
+func builtins(account *model.Account, src []string) {
+	delete(account.Meta, "k")      // want `field Account\.Meta is readonly outside package model`
+	clear(account.Meta)            // want `field Account\.Meta is readonly outside package model`
+	clear(account.Items)           // want `field Account\.Items is readonly outside package model`
+	copy(account.Items, src)       // want `field Account\.Items is readonly outside package model`
+	copy(account.Items[1:], src)   // want `field Account\.Items is readonly outside package model`
+	account.Items[1:][0] = "x"     // want `field Account\.Items is readonly outside package model`
+	copy(src, account.Items)       // 読み取り側は許可
+	_ = append(account.Items, "x") // 新しいスライスを返すだけなので許可
+}
+
+// 同名のユーザー定義関数は組み込みではないので対象外。
+func shadowedBuiltin(account *model.Account) {
+	delete := func(m map[string]string, k string) { _ = m[k] }
+	delete(account.Meta, "k")
+}
+
+// shallow なら組み込み関数による中身の書き換えも許可される。
+func builtinsShallow(cart *model.Cart, src []string) {
+	clear(cart.Lines)
+	copy(cart.Lines, src)
 }
 
 // immutable でも composite literal による生成とタグなしフィールドへの代入は許可される。

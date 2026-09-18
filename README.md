@@ -139,6 +139,13 @@ u.Status = StatusActive
 
 // Initialization via composite literal (including constructors)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
+
+// Reassigning a plain variable: treated like initialization
+u = model.User{ID: id}
+
+// Swapping a reference: the referenced contents are untouched
+team.Owner = &other   // *User field
+team.Guests = nil     // []User field
 ```
 
 Forbidden from outside the declaring package:
@@ -149,21 +156,37 @@ userPtr.Status = StatusDeleted     // through a pointer
 order.User.Status = StatusDeleted  // nested access
 users[i].Status = StatusDeleted    // slice element
 user.TenantID += "-x"              // compound assignment, ++ and -- too
-*userPtr = model.User{}            // whole-struct store through a pointer
 admin.Status = StatusDeleted       // field promoted via embedding
 ```
 
+Storing a whole struct value over existing storage overwrites every field in
+it, so it is forbidden whenever the value holds a readonly field, directly or
+nested by value (sub-structs, embedded structs, arrays):
+
+```go
+*userPtr = model.User{}      // through a pointer
+users[i] = model.User{}      // slice element
+byID["x"] = model.User{}     // map element
+order.User = model.User{}    // untagged field holding a User
+*admin = Admin{}             // Admin embeds model.User
+```
+
 A readonly tag on a struct-, slice-, or map-typed field also protects the
-field's contents by default. Opt out with the `shallow` option:
+field's contents by default, including through the `delete`, `clear`, and
+`copy` builtins. Opt out with the `shallow` option:
 
 ```go
 type Account struct {
-    Profile Profile  `readonly:"external"`
-    Items   []string `readonly:"external"`
+    Profile Profile           `readonly:"external"`
+    Items   []string          `readonly:"external"`
+    Meta    map[string]string `readonly:"external"`
 }
 
-account.Profile.Name = "x" // forbidden: writes into a readonly field
-account.Items[0] = "x"     // forbidden: element of a readonly field
+account.Profile.Name = "x"  // forbidden: writes into a readonly field
+account.Items[0] = "x"      // forbidden: element of a readonly field
+copy(account.Items, src)    // forbidden: overwrites elements
+delete(account.Meta, "k")   // forbidden: removes an entry
+clear(account.Meta)         // forbidden: removes every entry
 ```
 
 An unrecognized tag value is reported at the declaration site, so a typo
@@ -230,5 +253,11 @@ fits an invariant that belongs to the type itself.
 - Writes through the field's address are not detected, whether stored
   (`p := &u.Status; *p = x`) or passed to a function (`rows.Scan(&u.TenantID)`,
   `json.Unmarshal(data, &u.Status)`).
+- Method calls that mutate a readonly field's contents through a pointer
+  receiver (`account.Profile.SetName("x")`) are not detected. Only assignments
+  and the `delete`, `clear`, and `copy` builtins count as writes.
+- Writes to a copy are reported just like writes to the original. A value
+  parameter or a `for _, u := range users` variable of a readonly-bearing type
+  is still flagged when its field is assigned.
 
 It is a static check for catching mistakes, not a security boundary.

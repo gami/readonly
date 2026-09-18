@@ -140,6 +140,13 @@ u.Status = StatusActive
 
 // composite literal による初期化(コンストラクタ含む)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
+
+// 裸の変数への再代入: 初期化と同じ扱い
+u = model.User{ID: id}
+
+// 参照の差し替え: 参照先の中身は書き換わらない
+team.Owner = &other   // *User 型のフィールド
+team.Guests = nil     // []User 型のフィールド
 ```
 
 外部パッケージから禁止される操作:
@@ -150,21 +157,37 @@ userPtr.Status = StatusDeleted     // ポインタ経由
 order.User.Status = StatusDeleted  // ネストしたアクセス
 users[i].Status = StatusDeleted    // スライス要素
 user.TenantID += "-x"              // 複合代入(++ / -- も同様)
-*userPtr = model.User{}            // ポインタ経由の構造体丸ごと代入
 admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
 ```
 
+既存の格納先に構造体を丸ごと代入すると中のフィールドがすべて上書きされるため、
+その値が readonly フィールドを(直接、または入れ子の構造体・埋め込み・配列として
+値で)含んでいれば禁止されます:
+
+```go
+*userPtr = model.User{}      // ポインタ経由
+users[i] = model.User{}      // スライス要素
+byID["x"] = model.User{}     // マップ要素
+order.User = model.User{}    // User を保持するタグなしフィールド
+*admin = Admin{}             // Admin は model.User を埋め込んでいる
+```
+
 構造体・スライス・マップ型のフィールドに付けた readonly タグは、デフォルトで
-フィールドの中身も保護します。`shallow` オプションで解除できます。
+フィールドの中身も保護します。組み込み関数の `delete` / `clear` / `copy` による
+書き換えも対象です。`shallow` オプションで解除できます。
 
 ```go
 type Account struct {
-    Profile Profile  `readonly:"external"`
-    Items   []string `readonly:"external"`
+    Profile Profile           `readonly:"external"`
+    Items   []string          `readonly:"external"`
+    Meta    map[string]string `readonly:"external"`
 }
 
-account.Profile.Name = "x" // 禁止: readonly フィールドの中身への書き込み
-account.Items[0] = "x"     // 禁止: readonly フィールドの要素への書き込み
+account.Profile.Name = "x"  // 禁止: readonly フィールドの中身への書き込み
+account.Items[0] = "x"      // 禁止: readonly フィールドの要素への書き込み
+copy(account.Items, src)    // 禁止: 要素の上書き
+delete(account.Meta, "k")   // 禁止: エントリの削除
+clear(account.Meta)         // 禁止: 全エントリの削除
 ```
 
 未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることは
@@ -229,5 +252,10 @@ DB 側で行うのが基本です。役立つ場面の例:
 - フィールドのアドレス経由の書き込みは検出しません。ポインタを保存する形
   (`p := &u.Status; *p = x`)も、関数に渡す形(`rows.Scan(&u.TenantID)`、
   `json.Unmarshal(data, &u.Status)`)も同様です。
+- ポインタレシーバのメソッド経由で readonly フィールドの中身を変更する呼び出し
+  (`account.Profile.SetName("x")`)は検出しません。書き込みとして扱うのは代入と
+  組み込み関数の `delete` / `clear` / `copy` だけです。
+- コピーへの書き込みも元の値への書き込みと同じように報告されます。値渡しの引数や
+  `for _, u := range users` の変数でも、readonly フィールドに代入すれば検出されます。
 
 これは誤操作を静的解析で捕まえるためのものであり、セキュリティ境界ではありません。

@@ -19,6 +19,13 @@ type Order struct {
 	User User
 }
 
+type Team struct {
+	Lead    User
+	Members [2]User
+	Guests  []User
+	Owner   *User
+}
+
 type Counter struct {
 	Value int `readonly:"external"`
 }
@@ -90,4 +97,12 @@ func New(id, tenantID string) *User {
 	u.TenantID = tenantID
 	u.Status = StatusActive
 	return u
+}
+
+// 同一パッケージ内では丸ごと代入も組み込み関数による中身の書き換えも許可される。
+func Reset(u *User, users []User, a *Account) {
+	*u = User{}
+	users[0] = User{}
+	delete(a.Meta, "k")
+	clear(a.Items)
 }

@@ -3,10 +3,12 @@
 //
 // Fields tagged `readonly:"external"` may stay exported (e.g. for ORM or
 // JSON serialization), but writes from another package are reported: direct
-// reassignment, writes into the field's contents (sub-fields and slice/map
-// elements), and whole-struct stores through a pointer. Writes within the
-// declaring package (including its external test package) and initialization
-// via composite literals are allowed.
+// reassignment, writes into the field's contents (sub-fields, slice/map
+// elements, and the delete/clear/copy builtins), and whole-struct stores into
+// existing storage (through a pointer, into a slice or map element, or into a
+// field). Writes within the declaring package (including its external test
+// package), initialization via composite literals, and reassignment of a
+// plain variable are allowed.
 //
 // Fields tagged `readonly:"immutable"` cannot be reassigned anywhere, even
 // in the declaring package; only composite literal initialization sets them.
@@ -37,7 +39,9 @@ Fields can stay exported for ORM/JSON purposes while writes like
 	user.Status = StatusDeleted
 	order.User.Name = "x"
 	user.Items[0] = "x"
+	delete(user.Meta, "k")
 	*userPtr = model.User{}
+	users[i] = model.User{}
 
 are rejected. readonly:"external" allows writes from the declaring package;
 readonly:"immutable" rejects reassignment everywhere. The shallow option
@@ -115,6 +119,7 @@ func run(pass *analysis.Pass) (any, error) {
 		(*ast.AssignStmt)(nil),
 		(*ast.IncDecStmt)(nil),
 		(*ast.RangeStmt)(nil),
+		(*ast.CallExpr)(nil),
 		(*ast.StructType)(nil),
 	}
 
@@ -135,11 +140,35 @@ func run(pass *analysis.Pass) (any, error) {
 					checkWrite(pass, stmt.Value)
 				}
 			}
+		case *ast.CallExpr:
+			if arg, ok := mutatingBuiltinArg(pass, stmt); ok {
+				checkContentsWrite(pass, arg)
+			}
 		case *ast.StructType:
 			checkTagValues(pass, stmt)
 		}
 	})
 	return nil, nil
+}
+
+// mutatingBuiltinArg returns the argument that call writes into when call is
+// one of the builtins that mutate their first argument in place: delete(m, k),
+// clear(x), and copy(dst, src). Shadowed identifiers are resolved through
+// type information, so a user-defined delete function is not matched.
+func mutatingBuiltinArg(pass *analysis.Pass, call *ast.CallExpr) (ast.Expr, bool) {
+	id, ok := ast.Unparen(call.Fun).(*ast.Ident)
+	if !ok {
+		return nil, false
+	}
+	b, ok := pass.TypesInfo.Uses[id].(*types.Builtin)
+	if !ok || len(call.Args) == 0 {
+		return nil, false
+	}
+	switch b.Name() {
+	case "delete", "clear", "copy":
+		return call.Args[0], true
+	}
+	return nil, false
 }
 
 // checkTagValues reports readonly tags with unrecognized values so that a
@@ -178,29 +207,58 @@ func checkWrite(pass *analysis.Pass, expr ast.Expr) {
 	if allowAllTestFiles && inTestFile(pass, expr.Pos()) {
 		return
 	}
-	if star, ok := expr.(*ast.StarExpr); ok {
-		checkStarStore(pass, star)
+	if walkPath(pass, expr, true) {
 		return
 	}
-	// Walk the target expression inward so that writes into the contents of
-	// a readonly field (order.User.Name, user.Items[0]) are caught, not just
-	// reassignment of the field itself. Only the first selector's final field
-	// is reassigned directly; everything deeper is a contents write, which
-	// shallow protection permits.
-	direct := true
+	// Nothing on the selection path is protected, so consider the store as
+	// a whole: assigning a struct value overwrites every field inside it.
+	// A plain variable (u = model.User{}) is treated like initialization;
+	// any other target (*p, xs[i], m[k], o.User) is existing storage that
+	// something else may still refer to.
+	if _, ok := expr.(*ast.Ident); ok {
+		return
+	}
+	checkWholeStore(pass, expr)
+}
+
+// checkContentsWrite reports expr if writing into its contents (as the
+// delete, clear, and copy builtins do) touches a readonly field declared in
+// another package. Unlike checkWrite, expr itself is never reassigned, so
+// shallow protection permits the write.
+func checkContentsWrite(pass *analysis.Pass, expr ast.Expr) {
+	expr = ast.Unparen(expr)
+	if allowAllTestFiles && inTestFile(pass, expr.Pos()) {
+		return
+	}
+	walkPath(pass, expr, false)
+}
+
+// walkPath walks the target expression inward so that writes into the
+// contents of a readonly field (order.User.Name, user.Items[0]) are caught,
+// not just reassignment of the field itself. direct indicates that expr is
+// itself reassigned; only the first selector's final field is then reassigned
+// directly, and everything deeper is a contents write, which shallow
+// protection permits. It reports whether a diagnostic was emitted.
+func walkPath(pass *analysis.Pass, expr ast.Expr, direct bool) bool {
 	for {
 		switch e := expr.(type) {
 		case *ast.SelectorExpr:
 			if checkSelection(pass, e, direct) {
-				return
+				return true
 			}
 			direct = false
 			expr = ast.Unparen(e.X)
 		case *ast.IndexExpr:
 			direct = false
 			expr = ast.Unparen(e.X)
+		case *ast.SliceExpr:
+			direct = false
+			expr = ast.Unparen(e.X)
+		case *ast.StarExpr:
+			direct = false
+			expr = ast.Unparen(e.X)
 		default:
-			return
+			return false
 		}
 	}
 }
@@ -237,32 +295,49 @@ func checkSelection(pass *analysis.Pass, sel *ast.SelectorExpr, direct bool) boo
 	return false
 }
 
-// checkStarStore reports *ptr = v when the pointed-to struct declares
-// readonly fields in another package: such a store overwrites the protected
-// fields wholesale.
-func checkStarStore(pass *analysis.Pass, star *ast.StarExpr) {
-	tv, ok := pass.TypesInfo.Types[star.X]
+// checkWholeStore reports target = v when target's type contains, by value,
+// a readonly field that the current package may not write: such a store
+// overwrites the protected field wholesale.
+func checkWholeStore(pass *analysis.Pass, target ast.Expr) {
+	tv, ok := pass.TypesInfo.Types[target]
 	if !ok {
 		return
 	}
-	ptr, ok := tv.Type.Underlying().(*types.Pointer)
-	if !ok {
+	owner, p, field := findProtectedField(pass, tv.Type, map[types.Type]bool{})
+	if field == nil {
 		return
 	}
-	elem := ptr.Elem()
-	st, ok := elem.Underlying().(*types.Struct)
-	if !ok {
-		return
+	pass.Reportf(target.Pos(), "cannot assign to %s: %s", types.ExprString(target), describe(p.mode, typeName(owner), field))
+}
+
+// findProtectedField searches t for a field the current package may not
+// write, descending through fields held by value: nested and embedded
+// structs and arrays. Pointers, slices, and maps are not followed, since
+// storing over them replaces a reference rather than the referenced
+// contents. A whole store reassigns every such field directly, so the
+// shallow option does not exempt it. It returns the struct type owning the
+// field, its protection, and the field, or a nil field if none is found.
+func findProtectedField(pass *analysis.Pass, t types.Type, seen map[types.Type]bool) (types.Type, protection, *types.Var) {
+	t = types.Unalias(t)
+	if seen[t] {
+		return nil, protection{}, nil
 	}
-	// A whole-struct store reassigns every field directly, so the shallow
-	// option does not exempt it.
-	for i := 0; i < st.NumFields(); i++ {
-		field := st.Field(i)
-		if p := parseTag(st.Tag(i)); violates(pass, p.mode, field) {
-			pass.Reportf(star.Pos(), "cannot assign to *%s: %s", typeName(elem), describe(p.mode, typeName(elem), field))
-			return
+	seen[t] = true
+	switch u := t.Underlying().(type) {
+	case *types.Array:
+		return findProtectedField(pass, u.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < u.NumFields(); i++ {
+			field := u.Field(i)
+			if p := parseTag(u.Tag(i)); violates(pass, p.mode, field) {
+				return t, p, field
+			}
+			if owner, p, f := findProtectedField(pass, field.Type(), seen); f != nil {
+				return owner, p, f
+			}
 		}
 	}
+	return nil, protection{}, nil
 }
 
 // inTestFile reports whether pos lies in a *_test.go file.

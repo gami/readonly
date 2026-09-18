@@ -48,11 +48,13 @@ inv.Number = "INV-2"            // 定義パッケージ内でも報告される
 
 ```go
 type Cart struct {
-    Lines []string `readonly:"external,shallow"`
+    Lines  []string `readonly:"external,shallow"`
+    Parent *Node    `readonly:"external,shallow"` // 他所が所有する共有オブジェクト
 }
 
-cart.Lines = nil    // 報告される: フィールド自体の再代入
-cart.Lines[0] = "x" // 許可: 中身は書き込み可能
+cart.Lines = nil        // 報告される: フィールド自体の再代入
+cart.Lines[0] = "x"     // 許可: 中身は書き込み可能
+cart.Parent.Name = "x"  // 許可: 参照先は書き込み可能
 ```
 
 直接実行する場合:
@@ -172,15 +174,17 @@ order.User = model.User{}    // User を保持するタグなしフィールド
 *admin = Admin{}             // Admin は model.User を埋め込んでいる
 ```
 
-構造体・スライス・マップ型のフィールドに付けた readonly タグは、デフォルトで
-フィールドの中身も保護します。組み込み関数の `delete` / `clear` / `copy` による
-書き換えも対象です。`shallow` オプションで解除できます。
+構造体・スライス・マップ・ポインタ型のフィールドに付けた readonly タグは、
+デフォルトでフィールドの中身(サブフィールド、要素、参照先)も保護します。
+組み込み関数の `delete` / `clear` / `copy` による書き換えも対象です。`shallow`
+オプションで解除できます。
 
 ```go
 type Account struct {
     Profile Profile           `readonly:"external"`
     Items   []string          `readonly:"external"`
     Meta    map[string]string `readonly:"external"`
+    Ref     *Profile          `readonly:"external"`
 }
 
 account.Profile.Name = "x"  // 禁止: readonly フィールドの中身への書き込み
@@ -188,7 +192,15 @@ account.Items[0] = "x"      // 禁止: readonly フィールドの要素への�
 copy(account.Items, src)    // 禁止: 要素の上書き
 delete(account.Meta, "k")   // 禁止: エントリの削除
 clear(account.Meta)         // 禁止: 全エントリの削除
+account.Ref.Name = "x"      // 禁止: readonly ポインタ経由の書き込み
+*account.Ref = Profile{}    // 禁止: 参照先の上書き
 ```
+
+上の丸ごと代入との非対称に注意してください。タグ付きフィールドの「中身」は
+ポインタの先まで含みます。`account.Ref.Name = "x"` は実際に参照先を書き換える
+からです。一方、丸ごと代入が上書きするのは構造体が値で保持しているものだけなので、
+`*order = Order{}` は `order.UserPtr` が指していた先への書き込みではありません。
+どちらも「その代入で実際に書き換わるメモリはどこか」で決まっています。
 
 未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることは
 ありません:

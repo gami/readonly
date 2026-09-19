@@ -306,7 +306,13 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 		if !ok {
 			continue
 		}
+		// A field list like `A, _ int` gives every name the tag, so a blank
+		// name in it would silently become the struct default. Refuse it.
 		blank := len(f.Names) == 1 && f.Names[0].Name == blankField
+		if len(f.Names) > 1 && containsBlank(f.Names) {
+			pass.Reportf(f.Tag.Pos(), "readonly tag on a field list with a blank name would set the struct default; declare the blank field on its own")
+			continue
+		}
 		parts := strings.Split(v, ",")
 		switch {
 		case parts[0] == tagOptOut && blank:
@@ -316,6 +322,9 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 			if len(parts) > 1 {
 				pass.Reportf(f.Tag.Pos(), "readonly tag value %q takes no options", tagOptOut)
 			}
+			continue
+		case parts[0] != tagExternal && parts[0] != tagImmutable && blank:
+			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q)", parts[0], tagExternal, tagImmutable)
 			continue
 		case parts[0] != tagExternal && parts[0] != tagImmutable:
 			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q, %q)", parts[0], tagExternal, tagImmutable, tagOptOut)
@@ -442,10 +451,8 @@ func (c *checker) checkWrite(expr ast.Expr) {
 	case *ast.Ident:
 		return
 	case *ast.IndexExpr:
-		if tv, ok := c.pass.TypesInfo.Types[ast.Unparen(e.X)]; ok {
-			if _, isMap := tv.Type.Underlying().(*types.Map); isMap {
-				return
-			}
+		if tv, ok := c.pass.TypesInfo.Types[ast.Unparen(e.X)]; ok && isMap(tv.Type) {
+			return
 		}
 	}
 	c.checkWholeStore(expr)
@@ -773,6 +780,65 @@ func typeName(t types.Type) string {
 		return named.Obj().Name()
 	}
 	return "struct"
+}
+
+// isMap reports whether t is a map type. For a type parameter it reports
+// whether every type in the constraint's type set is a map, i.e. the core
+// type is a map; go/types does not export core type computation.
+func isMap(t types.Type) bool {
+	if _, ok := t.Underlying().(*types.Map); ok {
+		return true
+	}
+	tp, ok := types.Unalias(t).(*types.TypeParam)
+	if !ok {
+		return false
+	}
+	iface, ok := tp.Constraint().Underlying().(*types.Interface)
+	if !ok {
+		return false
+	}
+	allMaps, hasTerms := typeSetAll(iface, func(term types.Type) bool {
+		_, ok := term.Underlying().(*types.Map)
+		return ok
+	})
+	return allMaps && hasTerms
+}
+
+// typeSetAll reports whether every type term reachable from iface (through
+// unions and embedded interfaces) satisfies pred, and whether any term was
+// found at all. Method-only interfaces such as comparable contribute no
+// terms.
+func typeSetAll(iface *types.Interface, pred func(types.Type) bool) (all, hasTerms bool) {
+	all = true
+	for i := 0; i < iface.NumEmbeddeds(); i++ {
+		switch e := iface.EmbeddedType(i).(type) {
+		case *types.Union:
+			for j := 0; j < e.Len(); j++ {
+				hasTerms = true
+				all = all && pred(e.Term(j).Type())
+			}
+		default:
+			if inner, ok := e.Underlying().(*types.Interface); ok {
+				innerAll, innerTerms := typeSetAll(inner, pred)
+				all = all && innerAll
+				hasTerms = hasTerms || innerTerms
+				continue
+			}
+			hasTerms = true
+			all = all && pred(e)
+		}
+	}
+	return all, hasTerms
+}
+
+// containsBlank reports whether names includes the blank identifier.
+func containsBlank(names []*ast.Ident) bool {
+	for _, name := range names {
+		if name.Name == blankField {
+			return true
+		}
+	}
+	return false
 }
 
 // isPointer reports whether t is a pointer type.

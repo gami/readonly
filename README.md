@@ -74,7 +74,7 @@ type Event struct {
 
 The blank field costs nothing at runtime and is ignored by `encoding/json`
 and ORMs. It does make unkeyed literals (`Event{"id", t, ""}`) a compile
-error, which is usually what you want for such types.
+error in other packages, which is usually what you want for such types.
 
 Run it directly:
 
@@ -286,7 +286,7 @@ in case, are reported at the declaration site, so a typo cannot silently
 disable protection:
 
 ```go
-Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable", "-")
 Status Status `ReadOnly:"external"` // unrecognized struct tag key "ReadOnly" (did you mean "readonly"?)
 ```
 

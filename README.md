@@ -3,7 +3,8 @@
 [日本語](README.ja.md)
 
 `readonly` is a Go linter that reports writes to struct fields tagged
-`readonly:"..."` from outside the package that declares them.
+`readonly:"..."`: from outside the declaring package (`external`), or from
+anywhere (`immutable`).
 
 The fields stay exported, so they keep working with ORM mapping, JSON
 serialization, or generated OpenAPI types. What the linter blocks is code in
@@ -70,6 +71,9 @@ go install github.com/gami/readonly/cmd/readonly@latest
 go vet -vettool=$(which readonly) ./...
 ```
 
+To embed it in your own checker, use
+`readonly.NewAnalyzer(readonly.Options{...})`.
+
 ### golangci-lint
 
 readonly ships as a [module plugin](https://golangci-lint.run/plugins/module-plugins/). Put `.custom-gcl.yml` in your repository:
@@ -107,9 +111,9 @@ Then run `./custom-gcl run ./...`. Suppression via `//nolint:readonly` works as 
 ### Allowing writes in test files
 
 By default, writes are reported in any package other than the declaring one,
-including its tests. (The declaring package's own black-box tests, `package
-user_test` alongside `user`, are always allowed.) So a repository or service
-test that builds a fixture and then tweaks a protected field gets flagged.
+including its tests. (For `external`, the declaring package's own black-box
+tests, `package user_test`, are allowed.) So a repository or service test
+that builds a fixture and then tweaks a protected field gets flagged.
 
 The `-allow-all-test-files` flag exempts every `*_test.go` file, so test code
 anywhere can mutate readonly fields while production code stays protected:
@@ -131,8 +135,8 @@ With golangci-lint, set it under the linter's `settings`:
 ### Reporting address-of
 
 By default only assignments and the `delete`, `clear`, and `copy` builtins
-count as writes. Handing out the address of a readonly field is not
-reported, even though that is how ORM and JSON code usually writes:
+count as writes. Passing the address of a readonly field is not reported,
+even though that is how ORM and JSON code writes:
 
 ```go
 rows.Scan(&u.ID)
@@ -140,7 +144,7 @@ json.Unmarshal(data, &u.Status)
 account.Profile.SetName("x") // pointer receiver: implicitly &account.Profile
 ```
 
-The `-report-address-of` flag turns these into diagnostics:
+The `-report-address-of` flag reports these:
 
 ```sh
 readonly -report-address-of ./...
@@ -154,47 +158,37 @@ readonly -report-address-of ./...
           report-address-of: true
 ```
 
-With the flag on, the following are reported when the path goes through a
-readonly field (or its contents, unless `shallow`):
+With the flag on, taking the address of a readonly field (or of its
+contents, unless `shallow`) is reported in these cases:
 
 ```go
-rows.Scan(&u.ID)                // address passed to a call
-fmt.Sscan(s, &account.Items[0]) // address of contents passed to a call
-account.Profile.SetName("x")    // pointer receiver call on the field
-doc.Touch()                     // pointer receiver promoted through a tagged embedded field
+rows.Scan(&u.ID)                // passed to a call
+account.Profile.SetName("x")    // used as a pointer receiver
 
-p := &u.ID
-*p = "x"                        // written through p
-rows.Scan(p)                    // p passed to a call
+p := &u.ID                      // saved in a variable that is later
+*p = "x"                        //   written through,
+rows.Scan(p)                    //   passed to a call,
 q := &account.Profile
-q.SetName("x")                  // pointer receiver call through q
+q.SetName("x")                  //   or used as a pointer receiver
 ```
 
-The diagnostic names the pointer and where its address was taken:
-
-```text
-field User.ID is readonly outside package model (written through p, address taken at repo.go:42:7)
-```
-
-Still allowed with the flag on:
+Not reported:
 
 ```go
-resp.ID = &u.ID                 // storing a pointer is a read
-api.User{ID: &u.ID}             // same, in a composite literal
+resp.ID = &u.ID                 // storing the pointer is not a write
+api.User{ID: &u.ID}             // same
 json.Unmarshal(data, &u)        // the whole struct, not a field
-db.Find(&users[0])              // same
 p := &u.ID; _ = *p              // p is only read
 u.Activate()                    // pointer receiver on the type itself
 ```
 
-The flag is off by default because it cannot tell a call that writes from
-one that reads: `fmt.Println(&u.ID)` is reported too. If your codebase passes
-`&u.Field` to helpers for reading, prefer a value-taking helper such as
-`ptr(u.ID)` (`func ptr[T any](v T) *T`), which never takes the field's
-address.
+The flag is off by default because the linter cannot tell a call that
+writes from one that reads: `fmt.Println(&u.ID)` is reported too. If you
+pass `&u.Field` to helpers for reading, use a helper that takes a value
+instead, such as `ptr(u.ID)` with `func ptr[T any](v T) *T`.
 
-Note that `immutable` forbids writes everywhere, so with the flag on
-`rows.Scan(&inv.Number)` is reported inside the declaring package as well.
+`immutable` forbids writes everywhere, so `rows.Scan(&inv.Number)` is
+reported inside the declaring package too.
 
 ## Rules
 
@@ -229,9 +223,10 @@ user.TenantID += "-x"              // compound assignment, ++ and -- too
 admin.Status = StatusDeleted       // field promoted via embedding
 ```
 
-Storing a whole struct value over existing storage overwrites every field in
-it, so it is forbidden whenever the value holds a readonly field, directly or
-nested by value (sub-structs, embedded structs, arrays):
+Assigning a whole struct to a place that already holds one replaces every
+field at once, readonly ones included, so it is reported. This also applies
+when the readonly field sits inside a nested or embedded struct or an array
+element. Assigning to a plain variable is not reported (see above).
 
 ```go
 *userPtr = model.User{}      // through a pointer
@@ -263,12 +258,6 @@ account.Ref.Name = "x"      // forbidden: writes through a readonly pointer
 *account.Ref = Profile{}    // forbidden: overwrites the pointee
 ```
 
-Note the asymmetry with whole-struct stores above. "Contents" of a tagged
-field reach through a pointer, because `account.Ref.Name = "x"` really does
-write the pointee. A whole-struct store only overwrites what the struct holds
-by value, so `*order = Order{}` is not a write to whatever `order.UserPtr`
-pointed at. Both follow from which memory the assignment actually changes.
-
 An unrecognized tag value is reported at the declaration site, so a typo
 cannot silently disable protection:
 
@@ -280,6 +269,13 @@ The diagnostic looks like:
 
 ```text
 field User.Status is readonly outside package github.com/example/user
+```
+
+With `-report-address-of`, a write through a saved pointer also names the
+pointer and where its address was taken:
+
+```text
+field User.ID is readonly outside package github.com/example/user (written through p, address taken at repo.go:42:7)
 ```
 
 ## When this is useful
@@ -334,14 +330,14 @@ fits an invariant that belongs to the type itself.
   `account.Profile.SetName("x")`, `p := &u.Status; *p = x`) are only detected
   with `-report-address-of`, and even then only as described above.
 - With `-report-address-of`, a pointer is tracked by variable, not by flow.
-  A copy (`q := p`), a pointer returned or stored in a struct, and a pointer
-  received from another function are not tracked. Rebinding the variable
-  (`p = other`) does not stop tracking it, so a later `*p = x` is still
-  reported. Writes through a tracked pointer are reported even when they only
-  touch contents that `shallow` would allow.
+  A copy (`q := p`) and a pointer returned, stored in a struct, or received
+  from another function are not tracked. Rebinding the variable (`p = other`)
+  does not stop tracking it, so a later `*p = x` is still reported. Writes
+  through a tracked pointer are reported even when they only touch contents
+  that `shallow` would allow.
 - Passing the address of a whole struct (`json.Unmarshal(data, &u)`,
   `db.Find(&users[0])`) is never reported, so that loading a struct stays
-  possible. This mirrors how `u = model.User{}` is allowed.
+  possible.
 - Writes to a copy are reported just like writes to the original. A value
   parameter or a `for _, u := range users` variable of a readonly-bearing type
   is still flagged when its field is assigned.

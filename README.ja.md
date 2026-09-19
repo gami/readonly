@@ -205,12 +205,15 @@ u.Status = StatusActive
 // composite literal による初期化(コンストラクタ含む)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
 
-// 裸の変数への再代入: 初期化と同じ扱い
+// 現在のパッケージの変数への再代入: 初期化と同じ扱い
 u = model.User{ID: id}
 
 // 参照の差し替え: 参照先の中身は書き換わらない
 team.Owner = &other   // *User 型のフィールド
 team.Guests = nil     // []User 型のフィールド
+
+// マップ要素の設定: キーが指す値の差し替え
+byID[u.ID] = u
 ```
 
 外部パッケージから禁止される操作:
@@ -226,13 +229,13 @@ admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
 
 既に構造体が入っている場所に構造体を丸ごと代入すると、readonly フィールドも
 含めて全フィールドが置き換わるため報告されます。readonly フィールドが入れ子や
-埋め込みの構造体、配列要素の中にある場合も同様です。裸の変数への代入は報告
-されません(上記参照)。
+埋め込みの構造体、配列要素の中にある場合も同様です。現在のパッケージの変数と
+マップ要素への代入は報告されません(上記参照)。他パッケージの変数
+(`model.Default = model.User{}`)はそのパッケージの格納先なので報告されます。
 
 ```go
 *userPtr = model.User{}      // ポインタ経由
 users[i] = model.User{}      // スライス要素
-byID["x"] = model.User{}     // マップ要素
 order.User = model.User{}    // User を保持するタグなしフィールド
 *admin = Admin{}             // Admin は model.User を埋め込んでいる
 ```
@@ -259,11 +262,12 @@ account.Ref.Name = "x"      // 禁止: readonly ポインタ経由の書き込�
 *account.Ref = Profile{}    // 禁止: 参照先の上書き
 ```
 
-未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることは
-ありません:
+未知のタグ値と、大文字小文字だけが `readonly` と異なるタグキーは宣言時に
+報告されるため、typo で保護が無音のまま外れることはありません:
 
 ```go
 Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
+Status Status `ReadOnly:"external"` // unrecognized struct tag key "ReadOnly" (did you mean "readonly"?)
 ```
 
 診断メッセージは次のようになります:
@@ -325,9 +329,15 @@ DB 側で行うのが基本です。役立つ場面の例:
 ## 制限
 
 - リフレクションや unsafe による変更の検出、実行時の制御は対象外です。
+- スライス・マップ・ポインタ型フィールドの別名経由の書き込みは検出しません:
+  `items := a.Items; items[0] = "x"`、`sort.Strings(a.Items)`、`mutate(a.Ref)`、
+  `append(a.Items[:0], "x")`。引数に書き込む関数として扱うのは `delete` /
+  `clear` / `copy` だけです。
 - フィールドのアドレス経由の書き込み(`rows.Scan(&u.TenantID)`、
   `account.Profile.SetName("x")`、`p := &u.Status; *p = x`)は
-  `-report-address-of` を有効にしたときだけ、上述の範囲で検出されます。
+  `-report-address-of` を有効にしたときだけ、上述の範囲で検出されます。メソッド値
+  (`f := a.Profile.SetName; f("x")`)とインターフェースに格納したポインタ
+  (`var s Setter = &a.Profile; s.SetName("x")`)は有効にしても検出しません。
 - `-report-address-of` のポインタ追跡は変数単位で、フローは追いません。コピー
   (`q := p`)、返したポインタ、構造体に格納したポインタ、他の関数から受け取った
   ポインタは追跡しません。変数を別のポインタに再代入(`p = other`)しても追跡は

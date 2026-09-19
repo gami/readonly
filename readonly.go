@@ -238,8 +238,9 @@ func mutatingBuiltinArg(pass *analysis.Pass, call *ast.CallExpr) (ast.Expr, bool
 	return nil, false
 }
 
-// checkTagValues reports readonly tags with unrecognized values so that a
-// typo cannot silently leave a field unprotected.
+// checkTagValues reports readonly tags with unrecognized values, and tag
+// keys that differ from "readonly" only in case, so that a typo cannot
+// silently leave a field unprotected.
 func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 	for _, f := range st.Fields.List {
 		if f.Tag == nil {
@@ -248,6 +249,11 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 		raw, err := strconv.Unquote(f.Tag.Value)
 		if err != nil {
 			continue
+		}
+		for _, key := range tagKeys(raw) {
+			if key != tagKey && strings.EqualFold(key, tagKey) {
+				pass.Reportf(f.Tag.Pos(), "unrecognized struct tag key %q (did you mean %q?)", key, tagKey)
+			}
 		}
 		v, ok := reflect.StructTag(raw).Lookup(tagKey)
 		if !ok {
@@ -264,6 +270,45 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 			}
 		}
 	}
+}
+
+// tagKeys returns the keys of a struct tag, parsed the way
+// reflect.StructTag.Lookup does. Parsing stops at the first malformed pair,
+// which go vet's structtag check reports separately.
+func tagKeys(tag string) []string {
+	var keys []string
+	for tag != "" {
+		i := 0
+		for i < len(tag) && tag[i] == ' ' {
+			i++
+		}
+		tag = tag[i:]
+		if tag == "" {
+			break
+		}
+		i = 0
+		for i < len(tag) && tag[i] > ' ' && tag[i] != ':' && tag[i] != '"' && tag[i] != 0x7f {
+			i++
+		}
+		if i == 0 || i+1 >= len(tag) || tag[i] != ':' || tag[i+1] != '"' {
+			break
+		}
+		name := tag[:i]
+		tag = tag[i+1:]
+		i = 1
+		for i < len(tag) && tag[i] != '"' {
+			if tag[i] == '\\' {
+				i++
+			}
+			i++
+		}
+		if i >= len(tag) {
+			break
+		}
+		keys = append(keys, name)
+		tag = tag[i+1:]
+	}
+	return keys
 }
 
 // collectAddressBindings records every variable bound to the address of a
@@ -325,11 +370,20 @@ func (c *checker) checkWrite(expr ast.Expr) {
 	}
 	// Nothing on the selection path is protected, so consider the store as
 	// a whole: assigning a struct value overwrites every field inside it.
-	// A plain variable (u = model.User{}) is treated like initialization;
-	// any other target (*p, xs[i], m[k], o.User) is existing storage that
-	// something else may still refer to.
-	if _, ok := expr.(*ast.Ident); ok {
+	// A plain variable (u = model.User{}) is treated like initialization,
+	// and a map element (m[k] = v) replaces which value the key holds: map
+	// elements are not addressable, so nothing can observe the old value
+	// being overwritten in place. Any other target (*p, xs[i], o.User) is
+	// existing storage that something else may still refer to.
+	switch e := expr.(type) {
+	case *ast.Ident:
 		return
+	case *ast.IndexExpr:
+		if tv, ok := c.pass.TypesInfo.Types[ast.Unparen(e.X)]; ok {
+			if _, isMap := tv.Type.Underlying().(*types.Map); isMap {
+				return
+			}
+		}
 	}
 	c.checkWholeStore(expr)
 }

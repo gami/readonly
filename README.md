@@ -204,12 +204,15 @@ u.Status = StatusActive
 // Initialization via composite literal (including constructors)
 u := model.User{ID: id, TenantID: tenantID, Status: StatusActive}
 
-// Reassigning a plain variable: treated like initialization
+// Reassigning a variable of the current package: treated like initialization
 u = model.User{ID: id}
 
 // Swapping a reference: the referenced contents are untouched
 team.Owner = &other   // *User field
 team.Guests = nil     // []User field
+
+// Setting a map entry: replaces which value the key holds
+byID[u.ID] = u
 ```
 
 Forbidden from outside the declaring package:
@@ -226,12 +229,13 @@ admin.Status = StatusDeleted       // field promoted via embedding
 Assigning a whole struct to a place that already holds one replaces every
 field at once, readonly ones included, so it is reported. This also applies
 when the readonly field sits inside a nested or embedded struct or an array
-element. Assigning to a plain variable is not reported (see above).
+element. Assigning to a variable of the current package or to a map entry is
+not reported (see above); a variable of another package (`model.Default =
+model.User{}`) is that package's storage and is reported.
 
 ```go
 *userPtr = model.User{}      // through a pointer
 users[i] = model.User{}      // slice element
-byID["x"] = model.User{}     // map element
 order.User = model.User{}    // untagged field holding a User
 *admin = Admin{}             // Admin embeds model.User
 ```
@@ -258,11 +262,13 @@ account.Ref.Name = "x"      // forbidden: writes through a readonly pointer
 *account.Ref = Profile{}    // forbidden: overwrites the pointee
 ```
 
-An unrecognized tag value is reported at the declaration site, so a typo
-cannot silently disable protection:
+An unrecognized tag value, and a tag key that differs from `readonly` only
+in case, are reported at the declaration site, so a typo cannot silently
+disable protection:
 
 ```go
 Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
+Status Status `ReadOnly:"external"` // unrecognized struct tag key "ReadOnly" (did you mean "readonly"?)
 ```
 
 The diagnostic looks like:
@@ -326,9 +332,16 @@ fits an invariant that belongs to the type itself.
 
 - Writes via reflection or `unsafe`, and any runtime enforcement, are out of
   scope.
+- Writes through an alias of a slice, map, or pointer field are not detected:
+  `items := a.Items; items[0] = "x"`, `sort.Strings(a.Items)`,
+  `mutate(a.Ref)`, `append(a.Items[:0], "x")`. Only `delete`, `clear`, and
+  `copy` are recognized as functions that write into their argument.
 - Writes through the field's address (`rows.Scan(&u.TenantID)`,
   `account.Profile.SetName("x")`, `p := &u.Status; *p = x`) are only detected
-  with `-report-address-of`, and even then only as described above.
+  with `-report-address-of`, and even then only as described above. Method
+  values (`f := a.Profile.SetName; f("x")`) and pointers stored in an
+  interface (`var s Setter = &a.Profile; s.SetName("x")`) are not detected
+  even with the flag.
 - With `-report-address-of`, a pointer is tracked by variable, not by flow.
   A copy (`q := p`) and a pointer returned, stored in a struct, or received
   from another function are not tracked. Rebinding the variable (`p = other`)

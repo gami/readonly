@@ -73,6 +73,31 @@ func Renumber(inv *Invoice) {
 	inv.Number = "INV-2" // want `field Invoice\.Number is immutable`
 }
 
+// ブランクフィールドのタグは、その構造体の全フィールドの既定になる。
+type Event struct {
+	_ struct{} `readonly:"immutable"`
+
+	ID   string
+	At   int
+	Note string `readonly:"-"` // 既定から外す
+}
+
+type Tenant struct {
+	_ struct{} `readonly:"external,shallow"`
+
+	ID    string
+	Tags  []string
+	Owner string `readonly:"immutable"` // フィールド自身のタグが優先
+}
+
+// 既定が immutable なら定義パッケージ内でも再代入できない。external なら可。
+func Touch(ev *Event, t *Tenant) {
+	ev.ID = "x" // want `field Event\.ID is immutable`
+	ev.Note = "ok"
+	t.ID = "ok"
+	t.Owner = "x" // want `field Tenant\.Owner is immutable`
+}
+
 type Cart struct {
 	Lines []string `readonly:"external,shallow"`
 	Owner Profile  `readonly:"external,shallow"`

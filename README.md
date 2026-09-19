@@ -58,6 +58,24 @@ cart.Lines[0] = "x"     // allowed: contents stay writable
 cart.Parent.Name = "x"  // allowed: the pointee stays writable
 ```
 
+To protect every field of a struct, put the tag on a blank field instead
+of repeating it. A field's own tag takes precedence, and `readonly:"-"`
+opts a field out:
+
+```go
+type Event struct {
+    _ struct{} `readonly:"immutable"`
+
+    ID         string           // immutable
+    OccurredAt time.Time        // immutable
+    Note       string `readonly:"-"` // writable
+}
+```
+
+The blank field costs nothing at runtime and is ignored by `encoding/json`
+and ORMs. It does make unkeyed literals (`Event{"id", t, ""}`) a compile
+error, which is usually what you want for such types.
+
 Run it directly:
 
 ```sh

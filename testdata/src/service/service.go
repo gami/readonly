@@ -163,7 +163,51 @@ func shallow(cart *model.Cart, w *model.Wrap) {
 
 // 未知のタグ値は宣言時に報告される。
 type config struct {
-	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external", "immutable"\)`
+	Mode string `readonly:"writable"` // want `invalid readonly tag value "writable" \(valid values: "external", "immutable", "-"\)`
+}
+
+// ブランクフィールドの既定タグは、他のフィールドに個別のタグがない場合に適用される。
+type Wrapper struct {
+	model.Tenant
+}
+
+func structDefault(ev *model.Event, t *model.Tenant, w *Wrapper) {
+	ev.ID = "x"         // want `field Event\.ID is immutable`
+	ev.At = 1           // want `field Event\.At is immutable`
+	ev.Note = "x"       // readonly:"-" で既定から外れている
+	*ev = model.Event{} // want `cannot assign to \*ev: field Event\.ID is immutable`
+	_ = model.Event{ID: "x", At: 1}
+
+	t.ID = "x"       // want `field Tenant\.ID is readonly outside package model`
+	t.Tags[0] = "ok" // 既定が shallow なので中身は書き込み可能
+	t.Tags = nil     // want `field Tenant\.Tags is readonly outside package model`
+	t.Owner = "x"    // want `field Tenant\.Owner is immutable`
+	w.ID = "x"       // want `field Tenant\.ID is readonly outside package model`
+}
+
+// ブランクフィールドのタグの誤用は宣言時に報告される。
+type badDefault struct {
+	_ struct{} `readonly:"-"` // want `readonly tag value "-" is not allowed on a blank field \(valid values: "external", "immutable"\)`
+}
+
+type badOptOut struct {
+	Mode string `readonly:"-,shallow"` // want `readonly tag value "-" takes no options`
+}
+
+type duplicateDefault struct {
+	_    struct{} `readonly:"external"`
+	_    struct{} `readonly:"immutable"` // want `duplicate readonly default: only the first blank field's tag applies`
+	Mode string
+}
+
+// 既定のない構造体での readonly:"-" は何もしないが、エラーにもならない。
+type plainOptOut struct {
+	Mode string `readonly:"-"`
+}
+
+func optOutNoDefault(p *plainOptOut, d *duplicateDefault) {
+	p.Mode = "ok"
+	d.Mode = "ok" // 最初の既定(external)が効く。2 つ目の immutable なら報告されるはず
 }
 
 // 未知のオプションも宣言時に報告される。

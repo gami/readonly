@@ -1,6 +1,10 @@
 package service
 
-import "model"
+import (
+	"fmt"
+
+	"model"
+)
 
 // 外部パッケージからの代入は禁止される。
 func direct(user model.User) {
@@ -208,6 +212,44 @@ type plainOptOut struct {
 func optOutNoDefault(p *plainOptOut, d *duplicateDefault) {
 	p.Mode = "ok"
 	d.Mode = "ok" // 最初の既定(external)が効く。2 つ目の immutable なら報告されるはず
+}
+
+// ブランクフィールドの既定に無効な値を書くと、候補に "-" は出ない。
+type badDefaultValue struct {
+	_ struct{} `readonly:"externl"` // want `invalid readonly tag value "externl" \(valid values: "external", "immutable"\)`
+}
+
+// 複数名のフィールド宣言にブランクが含まれると、タグが構造体の既定になってしまうので拒否する。
+type multiName struct {
+	A, _ int `readonly:"external"` // want `readonly tag on a field list with a blank name would set the struct default; declare the blank field on its own`
+	Name string
+}
+
+func multiNameNotDefault(m *multiName) {
+	m.Name = "ok" // 型情報上は既定(external)が効くが、宣言側の報告で気づける。同一パッケージなので許可
+}
+
+// 型パラメータのマップ要素への丸ごと代入も、マップと同じく許可される。
+type userMap interface{ ~map[string]model.User }
+
+func genericMap[M ~map[string]model.User](m M) {
+	m["k"] = model.User{}
+}
+
+func genericMapNamed[M userMap](m M) {
+	m["k"] = model.User{}
+}
+
+func genericMapEmbedded[M interface {
+	userMap
+	fmt.Stringer
+}](m M) {
+	m["k"] = model.User{}
+}
+
+// 型パラメータのスライス要素は引き続き報告される。
+func genericSlice[S ~[]model.User](s S) {
+	s[0] = model.User{} // want `cannot assign to s\[0\]: field User\.ID is readonly outside package model`
 }
 
 // 未知のオプションも宣言時に報告される。

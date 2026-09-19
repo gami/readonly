@@ -73,8 +73,8 @@ type Event struct {
 ```
 
 ブランクフィールドは実行時のコストがなく、`encoding/json` や ORM からは無視
-されます。キーなしの composite literal(`Event{"id", t, ""}`)はコンパイル
-エラーになりますが、この種の型ではそのほうが望ましいことが多いです。
+されます。他パッケージからはキーなしの composite literal(`Event{"id", t, ""}`)
+がコンパイルエラーになりますが、この種の型ではそのほうが望ましいことが多いです。
 
 直接実行する場合:
 
@@ -285,7 +285,7 @@ account.Ref.Name = "x"      // 禁止: readonly ポインタ経由の書き込�
 報告されるため、typo で保護が無音のまま外れることはありません:
 
 ```go
-Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable")
+Status Status `readonly:"externl"` // invalid readonly tag value "externl" (valid values: "external", "immutable", "-")
 Status Status `ReadOnly:"external"` // unrecognized struct tag key "ReadOnly" (did you mean "readonly"?)
 ```
 

@@ -68,8 +68,13 @@ const (
 	tagExternal = "external"
 	// tagImmutable forbids reassignment everywhere.
 	tagImmutable = "immutable"
+	// tagOptOut excludes a field from the struct default set on a blank field.
+	tagOptOut = "-"
 	// optShallow limits protection to reassignment of the field itself.
 	optShallow = "shallow"
+	// blankField is the name of a blank field; a readonly tag on one sets
+	// the default for every other field of the struct.
+	blankField = "_"
 )
 
 // protection is a parsed readonly tag value: a mode and its options.
@@ -78,17 +83,23 @@ type protection struct {
 	shallow bool   // contents of the field stay writable
 }
 
-// parseTag parses a raw struct tag into a protection. Unrecognized modes
-// yield no protection — they are reported separately at the declaration
-// site by checkTagValues.
-func parseTag(tag string) protection {
+// parseTag parses a raw struct tag into a protection and reports whether a
+// readonly tag with a known value is present. A "-" value counts as present
+// with no protection, so it overrides a struct default. Unrecognized values
+// count as absent — they are reported separately at the declaration site by
+// checkTagValues.
+func parseTag(tag string) (protection, bool) {
 	v, ok := reflect.StructTag(tag).Lookup(tagKey)
 	if !ok {
-		return protection{}
+		return protection{}, false
 	}
 	parts := strings.Split(v, ",")
-	if parts[0] != tagExternal && parts[0] != tagImmutable {
-		return protection{}
+	switch parts[0] {
+	case tagOptOut:
+		return protection{}, true
+	case tagExternal, tagImmutable:
+	default:
+		return protection{}, false
 	}
 	p := protection{mode: parts[0]}
 	for _, opt := range parts[1:] {
@@ -96,7 +107,34 @@ func parseTag(tag string) protection {
 			p.shallow = true
 		}
 	}
-	return p
+	return p, true
+}
+
+// fieldProtection returns the protection of field i of st: its own readonly
+// tag if it has one, otherwise the struct default declared by a readonly
+// tag on a blank field. Blank fields themselves are never protected.
+func fieldProtection(st *types.Struct, i int) protection {
+	if st.Field(i).Name() == blankField {
+		return protection{}
+	}
+	if p, ok := parseTag(st.Tag(i)); ok {
+		return p
+	}
+	return structDefault(st)
+}
+
+// structDefault returns the protection declared by a readonly tag on the
+// first blank field of st, or none.
+func structDefault(st *types.Struct) protection {
+	for i := 0; i < st.NumFields(); i++ {
+		if st.Field(i).Name() != blankField {
+			continue
+		}
+		if p, ok := parseTag(st.Tag(i)); ok {
+			return p
+		}
+	}
+	return protection{}
 }
 
 // Analyzer is the readonly analyzer with default options. Its flags
@@ -246,10 +284,11 @@ func mutatingBuiltinArg(pass *analysis.Pass, call *ast.CallExpr) (ast.Expr, bool
 	return nil, false
 }
 
-// checkTagValues reports readonly tags with unrecognized values, and tag
-// keys that differ from "readonly" only in case, so that a typo cannot
-// silently leave a field unprotected.
+// checkTagValues reports readonly tags with unrecognized values, tag keys
+// that differ from "readonly" only in case, and misuse of the blank-field
+// default, so that a typo cannot silently leave a field unprotected.
 func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
+	defaultSeen := false
 	for _, f := range st.Fields.List {
 		if f.Tag == nil {
 			continue
@@ -267,10 +306,26 @@ func checkTagValues(pass *analysis.Pass, st *ast.StructType) {
 		if !ok {
 			continue
 		}
+		blank := len(f.Names) == 1 && f.Names[0].Name == blankField
 		parts := strings.Split(v, ",")
-		if parts[0] != tagExternal && parts[0] != tagImmutable {
-			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q)", parts[0], tagExternal, tagImmutable)
+		switch {
+		case parts[0] == tagOptOut && blank:
+			pass.Reportf(f.Tag.Pos(), "readonly tag value %q is not allowed on a blank field (valid values: %q, %q)", tagOptOut, tagExternal, tagImmutable)
 			continue
+		case parts[0] == tagOptOut:
+			if len(parts) > 1 {
+				pass.Reportf(f.Tag.Pos(), "readonly tag value %q takes no options", tagOptOut)
+			}
+			continue
+		case parts[0] != tagExternal && parts[0] != tagImmutable:
+			pass.Reportf(f.Tag.Pos(), "invalid readonly tag value %q (valid values: %q, %q, %q)", parts[0], tagExternal, tagImmutable, tagOptOut)
+			continue
+		}
+		if blank {
+			if defaultSeen {
+				pass.Reportf(f.Tag.Pos(), "duplicate readonly default: only the first blank field's tag applies")
+			}
+			defaultSeen = true
 		}
 		for _, opt := range parts[1:] {
 			if opt != optShallow {
@@ -577,7 +632,7 @@ func (c *checker) checkFieldPath(t types.Type, index []int, direct bool, pos tok
 			return hit{}, false
 		}
 		field := st.Field(idx)
-		p := parseTag(st.Tag(idx))
+		p := fieldProtection(st, idx)
 		reassigned := direct && i == len(index)-1
 		if violates(c.pass, p.mode, field) && (!p.shallow || reassigned) {
 			return hit{pos: pos, msg: describe(p.mode, typeName(t), field)}, true
@@ -637,7 +692,10 @@ func findProtectedField(pass *analysis.Pass, t types.Type, seen map[types.Type]b
 	case *types.Struct:
 		for i := 0; i < u.NumFields(); i++ {
 			field := u.Field(i)
-			if p := parseTag(u.Tag(i)); violates(pass, p.mode, field) {
+			if field.Name() == blankField {
+				continue // cannot be written by name, so overwriting it is unobservable
+			}
+			if p := fieldProtection(u, i); violates(pass, p.mode, field) {
 				return t, p, field
 			}
 			if owner, p, f := findProtectedField(pass, field.Type(), seen); f != nil {

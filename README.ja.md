@@ -58,6 +58,24 @@ cart.Lines[0] = "x"     // 許可: 中身は書き込み可能
 cart.Parent.Name = "x"  // 許可: 参照先は書き込み可能
 ```
 
+構造体の全フィールドを保護したい場合は、各フィールドに繰り返す代わりにブランク
+フィールドにタグを付けます。フィールド自身のタグが優先され、`readonly:"-"` で
+既定から外せます:
+
+```go
+type Event struct {
+    _ struct{} `readonly:"immutable"`
+
+    ID         string           // immutable
+    OccurredAt time.Time        // immutable
+    Note       string `readonly:"-"` // 書き込み可能
+}
+```
+
+ブランクフィールドは実行時のコストがなく、`encoding/json` や ORM からは無視
+されます。キーなしの composite literal(`Event{"id", t, ""}`)はコンパイル
+エラーになりますが、この種の型ではそのほうが望ましいことが多いです。
+
 直接実行する場合:
 
 ```sh

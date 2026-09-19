@@ -165,6 +165,7 @@ readonly -report-address-of ./...
 ```go
 rows.Scan(&u.ID)                // 関数に渡す
 account.Profile.SetName("x")    // ポインタレシーバとして使う
+f := account.Profile.SetName    // 同上(メソッド値)
 
 p := &u.ID                      // 変数に保存し、その変数を後で
 *p = "x"                        //   書き込みに使う、
@@ -335,9 +336,9 @@ DB 側で行うのが基本です。役立つ場面の例:
   `clear` / `copy` だけです。
 - フィールドのアドレス経由の書き込み(`rows.Scan(&u.TenantID)`、
   `account.Profile.SetName("x")`、`p := &u.Status; *p = x`)は
-  `-report-address-of` を有効にしたときだけ、上述の範囲で検出されます。メソッド値
-  (`f := a.Profile.SetName; f("x")`)とインターフェースに格納したポインタ
-  (`var s Setter = &a.Profile; s.SetName("x")`)は有効にしても検出しません。
+  `-report-address-of` を有効にしたときだけ、上述の範囲で検出されます。
+  インターフェースに格納したポインタ(`var s Setter = &a.Profile; s.SetName("x")`)
+  は有効にしても検出しません。
 - `-report-address-of` のポインタ追跡は変数単位で、フローは追いません。コピー
   (`q := p`)、返したポインタ、構造体に格納したポインタ、他の関数から受け取った
   ポインタは追跡しません。変数を別のポインタに再代入(`p = other`)しても追跡は

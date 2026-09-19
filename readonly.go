@@ -186,6 +186,12 @@ func run(pass *analysis.Pass, opts Options) (any, error) {
 		(*ast.CallExpr)(nil),
 		(*ast.StructType)(nil),
 	}
+	if opts.ReportAddressOf {
+		// Selecting a pointer receiver method takes the receiver's address
+		// whether or not the method is called right away, so every selector
+		// is checked, not just the callee of a call.
+		nodeFilter = append(nodeFilter, (*ast.SelectorExpr)(nil))
+	}
 
 	insp.Preorder(nodeFilter, func(n ast.Node) {
 		switch stmt := n.(type) {
@@ -211,6 +217,8 @@ func run(pass *analysis.Pass, opts Options) (any, error) {
 			if opts.ReportAddressOf {
 				c.checkCall(stmt)
 			}
+		case *ast.SelectorExpr:
+			c.checkReceiver(stmt)
 		case *ast.StructType:
 			checkTagValues(pass, stmt)
 		}
@@ -402,15 +410,12 @@ func (c *checker) checkContentsWrite(expr ast.Expr) {
 	}
 }
 
-// checkCall implements -report-address-of for one call: a pointer receiver
-// method called on a readonly field, and arguments that are the address of
-// a readonly field or a pointer variable bound to one.
+// checkCall implements -report-address-of for the arguments of one call:
+// the address of a readonly field, or a pointer variable bound to one. The
+// callee itself is covered by checkReceiver, which sees every selector.
 func (c *checker) checkCall(call *ast.CallExpr) {
 	if c.exemptTestFile(call.Pos()) {
 		return
-	}
-	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
-		c.checkReceiver(sel)
 	}
 	// Conversions and builtins do not write through their arguments.
 	if tv, ok := c.pass.TypesInfo.Types[call.Fun]; ok && (tv.IsType() || tv.IsBuiltin()) {
@@ -433,14 +438,19 @@ func (c *checker) checkCall(call *ast.CallExpr) {
 	}
 }
 
-// checkReceiver reports sel when it names a pointer receiver method reached
-// through a readonly field. If the receiver is a value, Go implicitly takes
-// its address, so the field itself may be reassigned by the method (direct;
-// shallow does not exempt it). If the receiver is already a pointer, the
-// method writes through it, which is a contents write.
+// checkReceiver reports sel when it selects a pointer receiver method
+// through a readonly field, whether the method is called (a.Profile.SetName("x"))
+// or taken as a method value (f := a.Profile.SetName). If the receiver is a
+// value, Go implicitly takes its address, so the field itself may be
+// reassigned by the method (direct; shallow does not exempt it). If the
+// receiver is already a pointer, the method writes through it, which is a
+// contents write.
 func (c *checker) checkReceiver(sel *ast.SelectorExpr) {
 	selection, ok := c.pass.TypesInfo.Selections[sel]
 	if !ok || selection.Kind() != types.MethodVal {
+		return
+	}
+	if c.exemptTestFile(sel.Pos()) {
 		return
 	}
 	fn, ok := selection.Obj().(*types.Func)
@@ -469,7 +479,7 @@ func (c *checker) checkReceiver(sel *ast.SelectorExpr) {
 	if len(embedded) > 0 {
 		lastDirect := !isPointer(fieldTypeAt(selection.Recv(), embedded))
 		if h, ok := c.checkFieldPath(selection.Recv(), embedded, lastDirect, sel.Sel.Pos()); ok {
-			c.report(h, "pointer receiver call")
+			c.report(h, "pointer receiver method")
 			return
 		}
 		direct = false // x is traversed into, not addressed itself
@@ -478,12 +488,12 @@ func (c *checker) checkReceiver(sel *ast.SelectorExpr) {
 	if id, ok := x.(*ast.Ident); ok {
 		if h, ok := c.trackedHit(id); ok {
 			h.pos = sel.Sel.Pos()
-			c.report(h, "pointer receiver call")
+			c.report(h, "pointer receiver method")
 		}
 		return
 	}
 	if h, ok := c.walkPath(x, direct); ok {
-		c.report(h, "pointer receiver call")
+		c.report(h, "pointer receiver method")
 	}
 }
 

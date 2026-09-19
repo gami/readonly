@@ -49,16 +49,35 @@ func store(u *model.User) resp {
 
 // ポインタレシーバのメソッド呼び出しは暗黙のアドレス取得として報告される。
 func receiver(a *model.Account, d *model.Doc, u *model.User, users []model.User, o *model.Order) {
-	a.Profile.SetName("x")    // want `field Account\.Profile is readonly outside package model \(pointer receiver call\)`
-	(&a.Profile).SetName("x") // want `field Account\.Profile is readonly outside package model \(pointer receiver call\)`
-	a.Ref.SetName("x")        // want `field Account\.Ref is readonly outside package model \(pointer receiver call\)`
-	a.Parent.SetName("x")     // shallow なポインタ: 参照先への書き込みは許可
-	d.Touch()                 // want `field Doc\.Audit is readonly outside package model \(pointer receiver call\)`
+	a.Profile.SetName("x")       // want `field Account\.Profile is readonly outside package model \(pointer receiver method\)`
+	(&a.Profile).SetName("x")    // want `field Account\.Profile is readonly outside package model \(pointer receiver method\)`
+	a.Ref.SetName("x")           // want `field Account\.Ref is readonly outside package model \(pointer receiver method\)`
+	a.Parent.SetName("x")        // shallow なポインタ: 参照先への書き込みは許可
+	d.Touch()                    // want `field Doc\.Audit is readonly outside package model \(pointer receiver method\)`
+	defer a.Profile.SetName("x") // want `field Account\.Profile is readonly outside package model \(pointer receiver method\)`
 
 	_ = a.Profile.Display() // 値レシーバはコピーに対する呼び出し
 	u.Activate()            // 型自身のメソッドは定義パッケージの API なので対象外
 	users[0].Activate()
 	o.User.Activate() // タグなしフィールド経由も同様
+}
+
+// メソッド値もその時点でアドレスが取られるので、呼び出さなくても報告される。
+func methodValue(a *model.Account, d *model.Doc) {
+	f := a.Profile.SetName // want `field Account\.Profile is readonly outside package model \(pointer receiver method\)`
+	f("x")
+	_ = a.Ref.SetName // want `field Account\.Ref is readonly outside package model \(pointer receiver method\)`
+	_ = d.Touch       // want `field Doc\.Audit is readonly outside package model \(pointer receiver method\)`
+
+	q := &a.Profile
+	g := q.SetName // want `field Account\.Profile is readonly outside package model \(pointer receiver method through q, address taken at addr\.go:\d+:\d+\)`
+	g("x")
+
+	_ = a.Profile.Display        // 値レシーバはコピー
+	_ = a.Parent.SetName         // shallow なポインタ: 参照先への書き込みは許可
+	_ = (*model.Profile).SetName // メソッド式はレシーバを取らない
+	h := (*model.Profile).SetName
+	h(&a.Profile, "x") // want `field Account\.Profile is readonly outside package model \(address passed to a call\)`
 }
 
 // ローカルに保存したポインタを書き込み・関数渡し・メソッド呼び出しに使うと報告される。
@@ -69,7 +88,7 @@ func local(u *model.User, a *model.Account) {
 
 	q := &a.Profile
 	q.Name = "x"            // want `field Account\.Profile is readonly outside package model \(written through q, address taken at addr\.go:\d+:\d+\)`
-	q.SetName("x")          // want `field Account\.Profile is readonly outside package model \(pointer receiver call through q, address taken at addr\.go:\d+:\d+\)`
+	q.SetName("x")          // want `field Account\.Profile is readonly outside package model \(pointer receiver method through q, address taken at addr\.go:\d+:\d+\)`
 	fmt.Sscan("x", &q.Name) // want `field Account\.Profile is readonly outside package model \(address passed to a call through q, address taken at addr\.go:\d+:\d+\)`
 
 	var r = &u.Status

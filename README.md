@@ -164,6 +164,7 @@ contents, unless `shallow`) is reported in these cases:
 ```go
 rows.Scan(&u.ID)                // passed to a call
 account.Profile.SetName("x")    // used as a pointer receiver
+f := account.Profile.SetName    // same, as a method value
 
 p := &u.ID                      // saved in a variable that is later
 *p = "x"                        //   written through,
@@ -338,10 +339,9 @@ fits an invariant that belongs to the type itself.
   `copy` are recognized as functions that write into their argument.
 - Writes through the field's address (`rows.Scan(&u.TenantID)`,
   `account.Profile.SetName("x")`, `p := &u.Status; *p = x`) are only detected
-  with `-report-address-of`, and even then only as described above. Method
-  values (`f := a.Profile.SetName; f("x")`) and pointers stored in an
-  interface (`var s Setter = &a.Profile; s.SetName("x")`) are not detected
-  even with the flag.
+  with `-report-address-of`, and even then only as described above. A
+  pointer stored in an interface (`var s Setter = &a.Profile;
+  s.SetName("x")`) is not detected even with the flag.
 - With `-report-address-of`, a pointer is tracked by variable, not by flow.
   A copy (`q := p`) and a pointer returned, stored in a struct, or received
   from another function are not tracked. Rebinding the variable (`p = other`)

@@ -17,6 +17,7 @@ func init() {
 // Settings mirrors the linter's settings block in .golangci.yml.
 type Settings struct {
 	AllowAllTestFiles bool `json:"allow-all-test-files"`
+	ReportAddressOf   bool `json:"report-address-of"`
 }
 
 // New constructs the plugin instance from its golangci-lint settings.
@@ -33,8 +34,15 @@ type plugin struct {
 }
 
 func (p plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
-	if p.settings.AllowAllTestFiles {
-		if err := readonly.Analyzer.Flags.Set("allow-all-test-files", "true"); err != nil {
+	flags := map[string]bool{
+		"allow-all-test-files": p.settings.AllowAllTestFiles,
+		"report-address-of":    p.settings.ReportAddressOf,
+	}
+	for name, on := range flags {
+		if !on {
+			continue
+		}
+		if err := readonly.Analyzer.Flags.Set(name, "true"); err != nil {
 			return nil, err
 		}
 	}

@@ -128,6 +128,74 @@ With golangci-lint, set it under the linter's `settings`:
           allow-all-test-files: true
 ```
 
+### Reporting address-of
+
+By default only assignments and the `delete`, `clear`, and `copy` builtins
+count as writes. Handing out the address of a readonly field is not
+reported, even though that is how ORM and JSON code usually writes:
+
+```go
+rows.Scan(&u.ID)
+json.Unmarshal(data, &u.Status)
+account.Profile.SetName("x") // pointer receiver: implicitly &account.Profile
+```
+
+The `-report-address-of` flag turns these into diagnostics:
+
+```sh
+readonly -report-address-of ./...
+```
+
+```yaml
+    custom:
+      readonly:
+        type: module
+        settings:
+          report-address-of: true
+```
+
+With the flag on, the following are reported when the path goes through a
+readonly field (or its contents, unless `shallow`):
+
+```go
+rows.Scan(&u.ID)                // address passed to a call
+fmt.Sscan(s, &account.Items[0]) // address of contents passed to a call
+account.Profile.SetName("x")    // pointer receiver call on the field
+doc.Touch()                     // pointer receiver promoted through a tagged embedded field
+
+p := &u.ID
+*p = "x"                        // written through p
+rows.Scan(p)                    // p passed to a call
+q := &account.Profile
+q.SetName("x")                  // pointer receiver call through q
+```
+
+The diagnostic names the pointer and where its address was taken:
+
+```text
+field User.ID is readonly outside package model (written through p, address taken at repo.go:42:7)
+```
+
+Still allowed with the flag on:
+
+```go
+resp.ID = &u.ID                 // storing a pointer is a read
+api.User{ID: &u.ID}             // same, in a composite literal
+json.Unmarshal(data, &u)        // the whole struct, not a field
+db.Find(&users[0])              // same
+p := &u.ID; _ = *p              // p is only read
+u.Activate()                    // pointer receiver on the type itself
+```
+
+The flag is off by default because it cannot tell a call that writes from
+one that reads: `fmt.Println(&u.ID)` is reported too. If your codebase passes
+`&u.Field` to helpers for reading, prefer a value-taking helper such as
+`ptr(u.ID)` (`func ptr[T any](v T) *T`), which never takes the field's
+address.
+
+Note that `immutable` forbids writes everywhere, so with the flag on
+`rows.Scan(&inv.Number)` is reported inside the declaring package as well.
+
 ## Rules
 
 Allowed:
@@ -262,12 +330,18 @@ fits an invariant that belongs to the type itself.
 
 - Writes via reflection or `unsafe`, and any runtime enforcement, are out of
   scope.
-- Writes through the field's address are not detected, whether stored
-  (`p := &u.Status; *p = x`) or passed to a function (`rows.Scan(&u.TenantID)`,
-  `json.Unmarshal(data, &u.Status)`).
-- Method calls that mutate a readonly field's contents through a pointer
-  receiver (`account.Profile.SetName("x")`) are not detected. Only assignments
-  and the `delete`, `clear`, and `copy` builtins count as writes.
+- Writes through the field's address (`rows.Scan(&u.TenantID)`,
+  `account.Profile.SetName("x")`, `p := &u.Status; *p = x`) are only detected
+  with `-report-address-of`, and even then only as described above.
+- With `-report-address-of`, a pointer is tracked by variable, not by flow.
+  A copy (`q := p`), a pointer returned or stored in a struct, and a pointer
+  received from another function are not tracked. Rebinding the variable
+  (`p = other`) does not stop tracking it, so a later `*p = x` is still
+  reported. Writes through a tracked pointer are reported even when they only
+  touch contents that `shallow` would allow.
+- Passing the address of a whole struct (`json.Unmarshal(data, &u)`,
+  `db.Find(&users[0])`) is never reported, so that loading a struct stays
+  possible. This mirrors how `u = model.User{}` is allowed.
 - Writes to a copy are reported just like writes to the original. A value
   parameter or a `for _, u := range users` variable of a readonly-bearing type
   is still flagged when its field is assigned.

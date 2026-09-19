@@ -34,6 +34,12 @@ type Profile struct {
 	Name string
 }
 
+// SetName はポインタレシーバなので、呼び出しは暗黙のアドレス取得になる。
+func (p *Profile) SetName(name string) { p.Name = name }
+
+// Display は値レシーバなので、呼び出しはコピーに対して行われる。
+func (p Profile) Display() string { return p.Name }
+
 type Account struct {
 	Profile Profile           `readonly:"external"`
 	Items   []string          `readonly:"external"`
@@ -45,6 +51,8 @@ type Account struct {
 type Audit struct {
 	N int
 }
+
+func (a *Audit) Touch() { a.N++ }
 
 type Doc struct {
 	Audit `readonly:"external"`

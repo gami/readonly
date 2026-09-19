@@ -129,6 +129,74 @@ golangci-lint では linter の `settings` に指定します:
           allow-all-test-files: true
 ```
 
+### アドレス取得を報告する
+
+デフォルトで書き込みとみなすのは、代入と組み込み関数の `delete` / `clear` /
+`copy` だけです。readonly フィールドのアドレスを渡す形は報告されません。ORM や
+JSON のコードが書き込む経路は、まさにこれなのですが:
+
+```go
+rows.Scan(&u.ID)
+json.Unmarshal(data, &u.Status)
+account.Profile.SetName("x") // ポインタレシーバ: 暗黙的に &account.Profile
+```
+
+`-report-address-of` を有効にすると、これらが報告されます:
+
+```sh
+readonly -report-address-of ./...
+```
+
+```yaml
+    custom:
+      readonly:
+        type: module
+        settings:
+          report-address-of: true
+```
+
+有効時に報告されるのは、経路が readonly フィールド(`shallow` でなければその
+中身も)を通る次の形です:
+
+```go
+rows.Scan(&u.ID)                // アドレスを関数に渡す
+fmt.Sscan(s, &account.Items[0]) // 中身のアドレスを関数に渡す
+account.Profile.SetName("x")    // フィールドに対するポインタレシーバ呼び出し
+doc.Touch()                     // タグ付き埋め込みフィールド経由で昇格したポインタレシーバ
+
+p := &u.ID
+*p = "x"                        // p 経由の書き込み
+rows.Scan(p)                    // p を関数に渡す
+q := &account.Profile
+q.SetName("x")                  // q 経由のポインタレシーバ呼び出し
+```
+
+診断にはポインタ変数名と、アドレスを取った位置が含まれます:
+
+```text
+field User.ID is readonly outside package model (written through p, address taken at repo.go:42:7)
+```
+
+有効にしても許可されるもの:
+
+```go
+resp.ID = &u.ID                 // ポインタの格納は読み取り
+api.User{ID: &u.ID}             // composite literal 内も同様
+json.Unmarshal(data, &u)        // フィールドではなく構造体全体
+db.Find(&users[0])              // 同上
+p := &u.ID; _ = *p              // p を読むだけ
+u.Activate()                    // 型自身のポインタレシーバ
+```
+
+デフォルトで無効なのは、書き込む呼び出しと読むだけの呼び出しを区別できない
+からです。`fmt.Println(&u.ID)` も報告されます。読み取り目的で `&u.Field` を
+ヘルパーに渡しているコードベースでは、`ptr(u.ID)`(`func ptr[T any](v T) *T`)
+のように値を受け取るヘルパーに置き換えると、フィールドのアドレスを取らずに
+済みます。
+
+`immutable` はどこからの書き込みも禁止するため、有効時は定義パッケージ内の
+`rows.Scan(&inv.Number)` も報告されます。
+
 ## 判定ルール
 
 許可される操作:
@@ -261,12 +329,17 @@ DB 側で行うのが基本です。役立つ場面の例:
 ## 制限
 
 - リフレクションや unsafe による変更の検出、実行時の制御は対象外です。
-- フィールドのアドレス経由の書き込みは検出しません。ポインタを保存する形
-  (`p := &u.Status; *p = x`)も、関数に渡す形(`rows.Scan(&u.TenantID)`、
-  `json.Unmarshal(data, &u.Status)`)も同様です。
-- ポインタレシーバのメソッド経由で readonly フィールドの中身を変更する呼び出し
-  (`account.Profile.SetName("x")`)は検出しません。書き込みとして扱うのは代入と
-  組み込み関数の `delete` / `clear` / `copy` だけです。
+- フィールドのアドレス経由の書き込み(`rows.Scan(&u.TenantID)`、
+  `account.Profile.SetName("x")`、`p := &u.Status; *p = x`)は
+  `-report-address-of` を有効にしたときだけ、上述の範囲で検出されます。
+- `-report-address-of` のポインタ追跡は変数単位で、フローは追いません。コピー
+  (`q := p`)、返したポインタ、構造体に格納したポインタ、他の関数から受け取った
+  ポインタは追跡しません。変数を別のポインタに再代入(`p = other`)しても追跡は
+  続くので、その後の `*p = x` は報告されます。追跡中のポインタ経由の書き込みは、
+  `shallow` なら許可されるはずの中身への書き込みでも報告されます。
+- 構造体全体のアドレスを渡す形(`json.Unmarshal(data, &u)`、`db.Find(&users[0])`)
+  は報告しません。構造体のロードができなくなるためです。`u = model.User{}` が
+  許可されるのと同じ扱いです。
 - コピーへの書き込みも元の値への書き込みと同じように報告されます。値渡しの引数や
   `for _, u := range users` の変数でも、readonly フィールドに代入すれば検出されます。
 

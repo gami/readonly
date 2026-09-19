@@ -74,11 +74,10 @@ func wholeStore(user *model.User) {
 	*user = model.User{} // want `cannot assign to \*user: field User\.ID is readonly outside package model`
 }
 
-// 既存の格納先(スライス・マップ要素、フィールド、埋め込み先、配列要素)への
-// 丸ごと代入も禁止される。値として readonly フィールドを含む構造体は、入れ子でも同様。
-func wholeStoreIntoStorage(users []model.User, m map[string]model.User, order *model.Order, admin *Admin, team *model.Team, teams []model.Team) {
+// 既存の格納先(スライス要素、フィールド、埋め込み先、配列要素)への丸ごと代入も
+// 禁止される。値として readonly フィールドを含む構造体は、入れ子でも同様。
+func wholeStoreIntoStorage(users []model.User, order *model.Order, admin *Admin, team *model.Team, teams []model.Team) {
 	users[0] = model.User{}        // want `cannot assign to users\[0\]: field User\.ID is readonly outside package model`
-	m["k"] = model.User{}          // want `cannot assign to m\["k"\]: field User\.ID is readonly outside package model`
 	order.User = model.User{}      // want `cannot assign to order\.User: field User\.ID is readonly outside package model`
 	*order = model.Order{}         // want `cannot assign to \*order: field User\.ID is readonly outside package model`
 	*admin = Admin{}               // want `cannot assign to \*admin: field User\.ID is readonly outside package model`
@@ -95,6 +94,17 @@ func wholeStoreAllowed(team *model.Team, user *model.User, ptrs []*model.User) {
 	team.Guests = nil
 	team.Owner = user
 	ptrs[0] = user
+}
+
+// マップ要素への丸ごと代入は、キーが指す値の差し替えなので許可される。
+// マップの値はアドレスを取れず、その場での上書きを観測できないため。
+func mapEntry(users []model.User, m map[string]model.User) map[string]model.User {
+	byID := map[string]model.User{}
+	for _, u := range users {
+		byID[u.ID] = u
+	}
+	m["k"] = model.User{}
+	return byID
 }
 
 // range 節での代入も禁止される。
@@ -118,7 +128,7 @@ func builtins(account *model.Account, src []string) {
 	copy(account.Items[1:], src)   // want `field Account\.Items is readonly outside package model`
 	account.Items[1:][0] = "x"     // want `field Account\.Items is readonly outside package model`
 	copy(src, account.Items)       // 読み取り側は許可
-	_ = append(account.Items, "x") // 新しいスライスを返すだけなので許可
+	_ = append(account.Items, "x") // 対象外(制限事項: 余剰容量があれば backing array に書く)
 }
 
 // 同名のユーザー定義関数は組み込みではないので対象外。
@@ -159,6 +169,13 @@ type config struct {
 // 未知のオプションも宣言時に報告される。
 type config2 struct {
 	Mode string `readonly:"external,shalow"` // want `invalid readonly tag option "shalow" \(valid options: "shallow"\)`
+}
+
+// 大文字小文字だけが異なるキーも宣言時に報告される。他のキーは対象外。
+type config3 struct {
+	Mode  string `ReadOnly:"external"`               // want `unrecognized struct tag key "ReadOnly" \(did you mean "readonly"\?\)`
+	Other string `json:"other" READONLY:"immutable"` // want `unrecognized struct tag key "READONLY" \(did you mean "readonly"\?\)`
+	Plain string `json:"plain" readonlyx:"x"`
 }
 
 // Struct Literal による初期化は許可される。

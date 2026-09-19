@@ -99,39 +99,46 @@ func parseTag(tag string) protection {
 	return p
 }
 
-// Analyzer is the readonly analyzer.
-var Analyzer = newAnalyzer()
+// Analyzer is the readonly analyzer with default options. Its flags
+// (-allow-all-test-files, -report-address-of) configure it from the command
+// line; use NewAnalyzer to configure it programmatically.
+var Analyzer = NewAnalyzer(Options{})
 
-var (
-	// allowAllTestFiles, when set, exempts writes in any *_test.go file
-	// from the write checks. By default only the declaring package's own
-	// test files are exempt (see foreign); this flag extends that to every
-	// test package so that, e.g., a repository test in another package can
-	// mutate fixtures.
-	allowAllTestFiles bool
+// Options configure an Analyzer. Each field has a flag of the same name on
+// the analyzer built from it, and the flag defaults to the field's value.
+type Options struct {
+	// AllowAllTestFiles exempts writes in any *_test.go file from the write
+	// checks. By default only the declaring package's own test files are
+	// exempt (see foreign); this extends that to every test package so
+	// that, e.g., a repository test in another package can mutate fixtures.
+	AllowAllTestFiles bool
 
-	// reportAddressOf, when set, treats taking the address of a readonly
-	// field as a write in the situations listed in the package doc. It is
-	// off by default because &u.Field is also how read-only pointers are
-	// built for optional API fields (resp.ID = &u.ID); those stores are
-	// never reported, but a read-only helper call such as fmt.Println(&u.ID)
-	// is.
-	reportAddressOf bool
-)
+	// ReportAddressOf treats taking the address of a readonly field as a
+	// write in the situations listed in the package doc. It is off by
+	// default because &u.Field is also how read-only pointers are built for
+	// optional API fields (resp.ID = &u.ID); those stores are never
+	// reported, but a read-only helper call such as fmt.Println(&u.ID) is.
+	ReportAddressOf bool
+}
 
-// newAnalyzer builds the readonly analyzer and registers its flags. Flag
+// NewAnalyzer builds a readonly analyzer configured by opts. Each analyzer
+// owns its options, so several can coexist with different settings. Flag
 // registration lives here rather than in init() so the package has no
 // init() — a requirement for inclusion in golangci-lint.
-func newAnalyzer() *analysis.Analyzer {
+func NewAnalyzer(opts Options) *analysis.Analyzer {
+	// Flags write into this copy, and Run reads it after flag parsing.
+	o := opts
 	a := &analysis.Analyzer{
 		Name:     "readonly",
 		Doc:      doc,
 		Requires: []*analysis.Analyzer{inspect.Analyzer},
-		Run:      run,
+		Run: func(pass *analysis.Pass) (any, error) {
+			return run(pass, o)
+		},
 	}
-	a.Flags.BoolVar(&allowAllTestFiles, "allow-all-test-files", false,
+	a.Flags.BoolVar(&o.AllowAllTestFiles, "allow-all-test-files", o.AllowAllTestFiles,
 		"allow writes to readonly fields in any *_test.go file, not just the declaring package's tests")
-	a.Flags.BoolVar(&reportAddressOf, "report-address-of", false,
+	a.Flags.BoolVar(&o.ReportAddressOf, "report-address-of", o.ReportAddressOf,
 		"report the address of a readonly field being passed to a call, used as a pointer receiver, or written through a local pointer")
 	return a
 }
@@ -139,6 +146,7 @@ func newAnalyzer() *analysis.Analyzer {
 // checker holds the per-pass state of the analysis.
 type checker struct {
 	pass *analysis.Pass
+	opts Options
 
 	// tracked maps a variable bound to the address of a readonly field
 	// (p := &u.ID) to where that address was taken. Later uses of the
@@ -162,11 +170,11 @@ type hit struct {
 	site *addrSite // non-nil when reached through a tracked pointer variable
 }
 
-func run(pass *analysis.Pass) (any, error) {
+func run(pass *analysis.Pass, opts Options) (any, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
-	c := &checker{pass: pass}
+	c := &checker{pass: pass, opts: opts}
 
-	if reportAddressOf {
+	if opts.ReportAddressOf {
 		c.tracked = map[*types.Var]*addrSite{}
 		c.collectAddressBindings(insp)
 	}
@@ -200,7 +208,7 @@ func run(pass *analysis.Pass) (any, error) {
 			if arg, ok := mutatingBuiltinArg(pass, stmt); ok {
 				c.checkContentsWrite(arg)
 			}
-			if reportAddressOf {
+			if opts.ReportAddressOf {
 				c.checkCall(stmt)
 			}
 		case *ast.StructType:
@@ -308,7 +316,7 @@ func (c *checker) collectAddressBindings(insp *inspector.Inspector) {
 // or range clause.
 func (c *checker) checkWrite(expr ast.Expr) {
 	expr = ast.Unparen(expr)
-	if allowAllTestFiles && inTestFile(c.pass, expr.Pos()) {
+	if c.exemptTestFile(expr.Pos()) {
 		return
 	}
 	if h, ok := c.walkPath(expr, true); ok {
@@ -332,7 +340,7 @@ func (c *checker) checkWrite(expr ast.Expr) {
 // shallow protection permits the write.
 func (c *checker) checkContentsWrite(expr ast.Expr) {
 	expr = ast.Unparen(expr)
-	if allowAllTestFiles && inTestFile(c.pass, expr.Pos()) {
+	if c.exemptTestFile(expr.Pos()) {
 		return
 	}
 	if h, ok := c.walkPath(expr, false); ok {
@@ -344,7 +352,7 @@ func (c *checker) checkContentsWrite(expr ast.Expr) {
 // method called on a readonly field, and arguments that are the address of
 // a readonly field or a pointer variable bound to one.
 func (c *checker) checkCall(call *ast.CallExpr) {
-	if allowAllTestFiles && inTestFile(c.pass, call.Pos()) {
+	if c.exemptTestFile(call.Pos()) {
 		return
 	}
 	if sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
@@ -595,9 +603,13 @@ func (c *checker) report(h hit, reason string) {
 	c.pass.Reportf(h.pos, "%s", msg)
 }
 
-// inTestFile reports whether pos lies in a *_test.go file.
-func inTestFile(pass *analysis.Pass, pos token.Pos) bool {
-	if f := pass.Fset.File(pos); f != nil {
+// exemptTestFile reports whether pos lies in a *_test.go file and
+// AllowAllTestFiles exempts writes there.
+func (c *checker) exemptTestFile(pos token.Pos) bool {
+	if !c.opts.AllowAllTestFiles {
+		return false
+	}
+	if f := c.pass.Fset.File(pos); f != nil {
 		return strings.HasSuffix(f.Name(), "_test.go")
 	}
 	return false

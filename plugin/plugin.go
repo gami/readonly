@@ -34,19 +34,11 @@ type plugin struct {
 }
 
 func (p plugin) BuildAnalyzers() ([]*analysis.Analyzer, error) {
-	flags := map[string]bool{
-		"allow-all-test-files": p.settings.AllowAllTestFiles,
-		"report-address-of":    p.settings.ReportAddressOf,
-	}
-	for name, on := range flags {
-		if !on {
-			continue
-		}
-		if err := readonly.Analyzer.Flags.Set(name, "true"); err != nil {
-			return nil, err
-		}
-	}
-	return []*analysis.Analyzer{readonly.Analyzer}, nil
+	a := readonly.NewAnalyzer(readonly.Options{
+		AllowAllTestFiles: p.settings.AllowAllTestFiles,
+		ReportAddressOf:   p.settings.ReportAddressOf,
+	})
+	return []*analysis.Analyzer{a}, nil
 }
 
 func (p plugin) GetLoadMode() string {

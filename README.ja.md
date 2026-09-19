@@ -2,8 +2,9 @@
 
 [English](README.md)
 
-`readonly` は、`readonly:"..."` タグを付けた構造体フィールドへの、定義パッケージ
-外からの書き込みを報告する Go linter です。
+`readonly` は、`readonly:"..."` タグを付けた構造体フィールドへの書き込みを報告する
+Go linter です。`external` なら定義パッケージ外からの書き込みを、`immutable` なら
+どこからの書き込みも報告します。
 
 フィールドは公開のままなので、ORM・JSON シリアライズ・生成された OpenAPI 型と
 そのまま使えます。この linter が止めるのは、別パッケージのコードによる次のような
@@ -70,6 +71,9 @@ go install github.com/gami/readonly/cmd/readonly@latest
 go vet -vettool=$(which readonly) ./...
 ```
 
+自前の checker に組み込むには `readonly.NewAnalyzer(readonly.Options{...})` を
+使います。
+
 ### golangci-lint
 
 [module plugin](https://golangci-lint.run/plugins/module-plugins/) として golangci-lint に組み込めます。リポジトリに `.custom-gcl.yml` を置きます:
@@ -107,9 +111,9 @@ linters:
 ### テストファイルでの書き込みを許可する
 
 デフォルトでは、定義パッケージ以外のすべてのパッケージで書き込みが報告されます
-(テストを含む)。ただし定義パッケージ自身のブラックボックステスト(`user` と同じ
-場所の `package user_test`)は常に許可されます。そのため、repository やサービスの
-テストで fixture を作って保護フィールドを差し替える操作は検出されてしまいます。
+(テストを含む)。`external` の場合、定義パッケージ自身のブラックボックステスト
+(`package user_test`)は許可されます。そのため、repository やサービスのテストで
+fixture を作って保護フィールドを差し替える操作は検出されてしまいます。
 
 `-allow-all-test-files` を有効にすると、すべての `*_test.go` ファイルが対象外に
 なり、テストコードはどこからでも readonly フィールドを変更できます(本番コードは
@@ -133,7 +137,7 @@ golangci-lint では linter の `settings` に指定します:
 
 デフォルトで書き込みとみなすのは、代入と組み込み関数の `delete` / `clear` /
 `copy` だけです。readonly フィールドのアドレスを渡す形は報告されません。ORM や
-JSON のコードが書き込む経路は、まさにこれなのですが:
+JSON のコードはこの形で書き込みます:
 
 ```go
 rows.Scan(&u.ID)
@@ -155,46 +159,36 @@ readonly -report-address-of ./...
           report-address-of: true
 ```
 
-有効時に報告されるのは、経路が readonly フィールド(`shallow` でなければその
-中身も)を通る次の形です:
+有効時は、readonly フィールド(`shallow` でなければその中身も)のアドレスを取る
+次の形が報告されます:
 
 ```go
-rows.Scan(&u.ID)                // アドレスを関数に渡す
-fmt.Sscan(s, &account.Items[0]) // 中身のアドレスを関数に渡す
-account.Profile.SetName("x")    // フィールドに対するポインタレシーバ呼び出し
-doc.Touch()                     // タグ付き埋め込みフィールド経由で昇格したポインタレシーバ
+rows.Scan(&u.ID)                // 関数に渡す
+account.Profile.SetName("x")    // ポインタレシーバとして使う
 
-p := &u.ID
-*p = "x"                        // p 経由の書き込み
-rows.Scan(p)                    // p を関数に渡す
+p := &u.ID                      // 変数に保存し、その変数を後で
+*p = "x"                        //   書き込みに使う、
+rows.Scan(p)                    //   関数に渡す、
 q := &account.Profile
-q.SetName("x")                  // q 経由のポインタレシーバ呼び出し
+q.SetName("x")                  //   ポインタレシーバとして使う
 ```
 
-診断にはポインタ変数名と、アドレスを取った位置が含まれます:
-
-```text
-field User.ID is readonly outside package model (written through p, address taken at repo.go:42:7)
-```
-
-有効にしても許可されるもの:
+報告されないもの:
 
 ```go
-resp.ID = &u.ID                 // ポインタの格納は読み取り
-api.User{ID: &u.ID}             // composite literal 内も同様
+resp.ID = &u.ID                 // ポインタを格納しても書き込みは起きない
+api.User{ID: &u.ID}             // 同上
 json.Unmarshal(data, &u)        // フィールドではなく構造体全体
-db.Find(&users[0])              // 同上
 p := &u.ID; _ = *p              // p を読むだけ
 u.Activate()                    // 型自身のポインタレシーバ
 ```
 
 デフォルトで無効なのは、書き込む呼び出しと読むだけの呼び出しを区別できない
 からです。`fmt.Println(&u.ID)` も報告されます。読み取り目的で `&u.Field` を
-ヘルパーに渡しているコードベースでは、`ptr(u.ID)`(`func ptr[T any](v T) *T`)
-のように値を受け取るヘルパーに置き換えると、フィールドのアドレスを取らずに
-済みます。
+ヘルパーに渡している場合は、`ptr(u.ID)`(`func ptr[T any](v T) *T`)のように
+値を受け取るヘルパーに置き換えてください。
 
-`immutable` はどこからの書き込みも禁止するため、有効時は定義パッケージ内の
+`immutable` はどこからの書き込みも禁止するため、定義パッケージ内の
 `rows.Scan(&inv.Number)` も報告されます。
 
 ## 判定ルール
@@ -230,9 +224,10 @@ user.TenantID += "-x"              // 複合代入(++ / -- も同様)
 admin.Status = StatusDeleted       // 埋め込みで昇格したフィールド
 ```
 
-既存の格納先に構造体を丸ごと代入すると中のフィールドがすべて上書きされるため、
-その値が readonly フィールドを(直接、または入れ子の構造体・埋め込み・配列として
-値で)含んでいれば禁止されます:
+既に構造体が入っている場所に構造体を丸ごと代入すると、readonly フィールドも
+含めて全フィールドが置き換わるため報告されます。readonly フィールドが入れ子や
+埋め込みの構造体、配列要素の中にある場合も同様です。裸の変数への代入は報告
+されません(上記参照)。
 
 ```go
 *userPtr = model.User{}      // ポインタ経由
@@ -264,12 +259,6 @@ account.Ref.Name = "x"      // 禁止: readonly ポインタ経由の書き込�
 *account.Ref = Profile{}    // 禁止: 参照先の上書き
 ```
 
-上の丸ごと代入との非対称に注意してください。タグ付きフィールドの「中身」は
-ポインタの先まで含みます。`account.Ref.Name = "x"` は実際に参照先を書き換える
-からです。一方、丸ごと代入が上書きするのは構造体が値で保持しているものだけなので、
-`*order = Order{}` は `order.UserPtr` が指していた先への書き込みではありません。
-どちらも「その代入で実際に書き換わるメモリはどこか」で決まっています。
-
 未知のタグ値は宣言時に報告されるため、typo で保護が無音のまま外れることは
 ありません:
 
@@ -281,6 +270,13 @@ Status Status `readonly:"externl"` // invalid readonly tag value "externl" (vali
 
 ```text
 field User.Status is readonly outside package github.com/example/user
+```
+
+`-report-address-of` で保存したポインタ経由の書き込みを報告するときは、
+ポインタ変数名とアドレスを取った位置も含まれます:
+
+```text
+field User.ID is readonly outside package github.com/example/user (written through p, address taken at repo.go:42:7)
 ```
 
 ## どんなときに役立つか
@@ -338,8 +334,7 @@ DB 側で行うのが基本です。役立つ場面の例:
   続くので、その後の `*p = x` は報告されます。追跡中のポインタ経由の書き込みは、
   `shallow` なら許可されるはずの中身への書き込みでも報告されます。
 - 構造体全体のアドレスを渡す形(`json.Unmarshal(data, &u)`、`db.Find(&users[0])`)
-  は報告しません。構造体のロードができなくなるためです。`u = model.User{}` が
-  許可されるのと同じ扱いです。
+  は報告しません。構造体のロードができなくなるためです。
 - コピーへの書き込みも元の値への書き込みと同じように報告されます。値渡しの引数や
   `for _, u := range users` の変数でも、readonly フィールドに代入すれば検出されます。
 
